@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+
+{% block title %}Start Call - Video Calling App{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h4><i class="fas fa-phone"></i> Start New Call</h4>
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+                    
+                    <div class="mb-3">
+                        <label for="call_type" class="form-label">Call Type</label>
+                        <select class="form-select" id="call_type" name="call_type" required>
+                            <option value="video">Video Call</option>
+                            <option value="audio">Audio Only</option>
+                            <option value="screen_share">Screen Share</option>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="target_username" class="form-label">
+                            Invite User (Optional)
+                        </label>
+                        <select class="form-select" id="target_username" name="target_username">
+                            <option value="">Create open room</option>
+                            {% for user in users %}
+                                <option value="{{ user.username }}">{{ user.username }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">
+                            Leave empty to create an open room that anyone can join
+                        </div>
+                    </div>
+                    
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="fas fa-video"></i> Start Call
+                        </button>
+                        <a href="{% url 'accounts:dashboard' %}" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Dashboard
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

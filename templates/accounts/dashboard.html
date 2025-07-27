@@ -1,0 +1,73 @@
+{% extends 'base.html' %}
+
+{% block title %}Dashboard - Video Calling App{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h4><i class="fas fa-tachometer-alt"></i> Dashboard</h4>
+            </div>
+            <div class="card-body">
+                <h5>Welcome, {{ user.username }}!</h5>
+                <p class="text-muted">Ready to start your video calling experience?</p>
+                
+                <div class="row mt-4">
+                    <div class="col-md-6">
+                        <div class="card bg-primary text-white">
+                            <div class="card-body text-center">
+                                <i class="fas fa-video fa-3x mb-3"></i>
+                                <h5>Start Video Call</h5>
+                                <p>Begin a new video call session</p>
+                                <a href="{% url 'calls:start_call' %}" class="btn btn-light">
+                                    <i class="fas fa-play"></i> Start Call
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card bg-success text-white">
+                            <div class="card-body text-center">
+                                <i class="fas fa-cog fa-3x mb-3"></i>
+                                <h5>Quality Settings</h5>
+                                <p>Configure your call quality preferences</p>
+                                <a href="{% url 'calls:quality_settings' %}" class="btn btn-light">
+                                    <i class="fas fa-sliders-h"></i> Settings
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-info-circle"></i> Quick Info</h5>
+            </div>
+            <div class="card-body">
+                <p><strong>Status:</strong> <span class="online-indicator"></span> Online</p>
+                <p><strong>Last Seen:</strong> {{ user.last_seen|date:"M d, Y H:i" }}</p>
+                <p><strong>Member Since:</strong> {{ user.date_joined|date:"M d, Y" }}</p>
+            </div>
+        </div>
+        
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5><i class="fas fa-question-circle"></i> Quick Help</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-unstyled">
+                    <li><i class="fas fa-check text-success"></i> Click "Start Call" to begin</li>
+                    <li><i class="fas fa-check text-success"></i> Share call ID with others</li>
+                    <li><i class="fas fa-check text-success"></i> Adjust quality in settings</li>
+                    <li><i class="fas fa-check text-success"></i> Use screen sharing feature</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

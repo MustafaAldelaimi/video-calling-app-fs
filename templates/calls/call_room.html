@@ -1,0 +1,143 @@
+{% extends 'base.html' %}
+
+{% block title %}Call Room - Video Calling App{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Main Video Area -->
+    <div class="col-md-9">
+        <div class="video-container" style="height: 500px;">
+            <video id="remoteVideo" class="video-element" autoplay playsinline></video>
+            <video id="localVideo" class="video-element" autoplay playsinline muted 
+                   style="position: absolute; top: 10px; right: 10px; width: 200px; height: 150px; z-index: 10;"></video>
+            
+            <div class="video-controls">
+                <button id="muteBtn" class="control-btn mute" title="Mute/Unmute">
+                    <i class="fas fa-microphone"></i>
+                </button>
+                <button id="videoBtn" class="control-btn video" title="Camera On/Off">
+                    <i class="fas fa-video"></i>
+                </button>
+                <button id="screenShareBtn" class="control-btn screen" title="Share Screen">
+                    <i class="fas fa-desktop"></i>
+                </button>
+                <button id="endCallBtn" class="control-btn end" title="End Call">
+                    <i class="fas fa-phone-slash"></i>
+                </button>
+            </div>
+        </div>
+        
+        <!-- Quality Control Panel -->
+        <div class="quality-panel">
+            <h5><i class="fas fa-sliders-h"></i> Quality Controls</h5>
+            <div class="row">
+                <div class="col-md-4">
+                    <label for="videoQuality" class="form-label">Video Quality:</label>
+                    <select id="videoQuality" class="form-select form-select-sm">
+                        <option value="low">Low (360p)</option>
+                        <option value="medium" selected>Medium (720p)</option>
+                        <option value="high">High (1080p)</option>
+                        <option value="ultra">Ultra (4K)</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Connection Stats:</label>
+                    <div>
+                        <small>Bandwidth: <span id="bandwidth">0</span> kbps</small><br>
+                        <small>Latency: <span id="latency">0</span> ms</small><br>
+                        <small>Packet Loss: <span id="packetLoss">0</span>%</small>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Adaptive Quality:</label>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="adaptiveQuality" 
+                               {% if quality_profile.adaptive_quality %}checked{% endif %}>
+                        <label class="form-check-label" for="adaptiveQuality">
+                            Auto-adjust quality
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Sidebar -->
+    <div class="col-md-3">
+        <div class="participant-list">
+            <h5><i class="fas fa-users"></i> Participants</h5>
+            <div id="participantsList">
+                <div class="participant-item">
+                    <span class="online-indicator"></span>
+                    {{ user.username }} (You)
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mt-3">
+            <div class="card-header">
+                <h6><i class="fas fa-share-alt"></i> Share Call</h6>
+            </div>
+            <div class="card-body">
+                <p class="small">Call ID:</p>
+                <div class="input-group">
+                    <input type="text" class="form-control" value="{{ call_id }}" readonly id="callIdInput">
+                    <button class="btn btn-outline-secondary" type="button" onclick="copyCallId()">
+                        <i class="fas fa-copy"></i>
+                    </button>
+                </div>
+                <p class="small text-muted mt-2">Share this ID with others to join the call</p>
+            </div>
+        </div>
+        
+        <div class="card mt-3">
+            <div class="card-header">
+                <h6><i class="fas fa-info-circle"></i> Call Info</h6>
+            </div>
+            <div class="card-body">
+                <p><strong>Type:</strong> {{ call_session.call_type|title }}</p>
+                <p><strong>Started:</strong> {{ call_session.started_at|date:"H:i" }}</p>
+                <p><strong>Status:</strong> <span class="badge bg-success">Active</span></p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Call ID and WebRTC Configuration -->
+<script>
+    const CALL_ID = '{{ call_id }}';
+    const USER_ID = '{{ user_id }}';
+    const USERNAME = '{{ username }}';
+    const WEBRTC_SERVERS = {{ webrtc_servers|safe }};
+    const QUALITY_PROFILE = {
+        defaultVideoQuality: '{{ quality_profile.default_video_quality }}',
+        defaultAudioQuality: '{{ quality_profile.default_audio_quality }}',
+        adaptiveQuality: {{ quality_profile.adaptive_quality|yesno:"true,false" }},
+        dataSaverMode: {{ quality_profile.data_saver_mode|yesno:"true,false" }}
+    };
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% url 'calls:webrtc_js' %}"></script>
+<script>
+    // Initialize WebRTC handler
+    const webrtcHandler = new WebRTCHandler(CALL_ID, USER_ID, USERNAME);
+    webrtcHandler.initializeCall();
+    
+    // Copy call ID function
+    function copyCallId() {
+        const callIdInput = document.getElementById('callIdInput');
+        callIdInput.select();
+        document.execCommand('copy');
+        
+        // Show feedback
+        const btn = event.target.closest('button');
+        const originalHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i>';
+        setTimeout(() => {
+            btn.innerHTML = originalHTML;
+        }, 2000);
+    }
+</script>
+{% endblock %}
