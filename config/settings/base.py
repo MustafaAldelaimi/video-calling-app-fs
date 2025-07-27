@@ -73,7 +73,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': config('DB_NAME', default='video_calling_db'),
         'USER': config('DB_USER', default='postgres'),
-        'PASSWORD': config('DB_PASSWORD', default='password'),
+        'PASSWORD': config('DB_PASSWORD', default='cool25'),
         'HOST': config('DB_HOST', default='localhost'),
         'PORT': config('DB_PORT', default='5432'),
     }
@@ -153,3 +153,8 @@ AUDIO_QUALITY_CHOICES = [
     ('high', 'High (128kbps)'),
     ('ultra', 'Ultra (256kbps)'),
 ]
+
+# Authentication URLs
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/'
+LOGOUT_REDIRECT_URL = '/login/'

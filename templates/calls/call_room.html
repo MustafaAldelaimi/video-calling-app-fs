@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block title %}Call Room - Video Calling App{% endblock %}
 
@@ -119,7 +120,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{% url 'calls:webrtc_js' %}"></script>
+<script src="{% static 'js/webrtc-handler.js' %}"></script>
 <script>
     // Initialize WebRTC handler
     const webrtcHandler = new WebRTCHandler(CALL_ID, USER_ID, USERNAME);
