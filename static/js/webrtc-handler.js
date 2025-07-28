@@ -445,10 +445,13 @@ class WebRTCHandler {
     return shouldInitiate
   }
 
+  /**
+   * Create peer connection for a user
+   */
   async createPeerConnection(userId) {
     console.log(`🔗 Creating peer connection for user: ${userId}`)
     
-    // Prevent creating duplicate connections
+    // Close existing connection if it exists
     if (this.peerConnections.has(userId)) {
       console.warn(`⚠️ Peer connection already exists for ${userId}, closing old one first`)
       this.closePeerConnection(userId)
@@ -478,7 +481,14 @@ class WebRTCHandler {
       iceServers: WEBRTC_SERVERS,
       iceCandidatePoolSize: 10
     })
+    
+    // 🔧 CRITICAL FIX: Store userId directly on the connection object
+    peerConnection._userId = userId
+    
+    // Add to connections map immediately
     this.peerConnections.set(userId, peerConnection)
+
+    console.log(`📊 Peer connections after adding ${userId}:`, Array.from(this.peerConnections.keys()))
 
     // Add local stream tracks (wait for them to be ready first)
     if (this.localStream) {
@@ -541,21 +551,26 @@ class WebRTCHandler {
     peerConnection.ontrack = async (event) => {
       const stream = event.streams[0]
       
-      // Fix: Proper userId resolution from the peer connection
-      let userId = null
-      for (const [id, pc] of Object.entries(this.peerConnections)) {
-        if (pc === peerConnection) {
-          userId = id
-          break
-        }
-      }
+      // 🔧 CRITICAL FIX: Get userId from connection object first, then fallback to map lookup
+      let userId = peerConnection._userId
       
-      if (!userId) {
-        console.error(`❌ Could not determine userId for received stream!`)
-        console.log(`🔍 Available peer connections:`, Object.keys(this.peerConnections))
-        console.log(`🔍 Current peer connection:`, peerConnection)
-        return
-      }
+              if (!userId) {
+          // Fallback: search in peer connections map
+          for (const [id, pc] of this.peerConnections.entries()) {
+            if (pc === peerConnection) {
+              userId = id
+              break
+            }
+          }
+        }
+      
+              if (!userId) {
+          console.error(`❌ Could not determine userId for received stream!`)
+          console.log(`🔍 Available peer connections:`, Array.from(this.peerConnections.keys()))
+          console.log(`🔍 Connection _userId:`, peerConnection._userId)
+          console.log(`🔍 Current peer connection:`, peerConnection)
+          return
+        }
       
       console.log(`📹 Received remote stream from user: ${userId}`, stream)
       
@@ -587,15 +602,15 @@ class WebRTCHandler {
             const width = settings.width || 0
             const height = settings.height || 0
             
-                                    if (width <= 1 || height <= 1) {
-                            console.error(`❌ Received remote video track with invalid dimensions: ${width}x${height}!`)
-                            
-                            // Request sender to reinitialize their video track
-                            console.log(`🔄 Requesting sender ${userId} to reinitialize video track`)
-                            this.requestSenderVideoRefresh(userId)
-                        } else {
-                            console.log(`✅ Remote video track has valid dimensions: ${width}x${height}`)
-                        }
+            if (width <= 1 || height <= 1) {
+              console.error(`❌ Received remote video track with invalid dimensions: ${width}x${height}!`)
+              
+              // Request sender to reinitialize their video track
+              console.log(`🔄 Requesting sender ${userId} to reinitialize video track`)
+              this.requestSenderVideoRefresh(userId)
+            } else {
+              console.log(`✅ Remote video track has valid dimensions: ${width}x${height}`)
+            }
           }
         }
         
@@ -613,21 +628,21 @@ class WebRTCHandler {
         }
       })
       
-                  // 📱 MOBILE: Wait for remote video tracks to be ready before attaching
-            let streamReady = true
-            if (this.isMobile) {
-                console.log(`📱 MOBILE DEBUG: Waiting for remote video tracks to initialize...`)
-                
-                streamReady = await this.waitForRemoteStreamReady(stream, 5000) // Reduced timeout to 5 seconds
-                
-                if (!streamReady) {
-                    console.warn(`⚠️ Remote stream not ready after 5 seconds, trying fallback attachment`)
-                    
-                    // Try to attach anyway with fallback handling
-                    await this.attachStreamWithFallback(userId, stream)
-                    return
-                }
-            }
+      // 📱 MOBILE: Wait for remote video tracks to be ready before attaching
+      let streamReady = true
+      if (this.isMobile) {
+        console.log(`📱 MOBILE DEBUG: Waiting for remote video tracks to initialize...`)
+        
+        streamReady = await this.waitForRemoteStreamReady(stream, 5000) // Reduced timeout to 5 seconds
+        
+        if (!streamReady) {
+          console.warn(`⚠️ Remote stream not ready after 5 seconds, trying fallback attachment`)
+          
+          // Try to attach anyway with fallback handling
+          await this.attachStreamWithFallback(userId, stream)
+          return
+        }
+      }
       
       // Attach the stream to video element
       this.attachStreamToVideoElement(userId, stream)
@@ -654,16 +669,17 @@ class WebRTCHandler {
 
     // Monitor connection state
     peerConnection.onconnectionstatechange = () => {
-      console.log(`🔗 Connection state with ${userId}:`, peerConnection.connectionState)
+      const state = peerConnection.connectionState
+      console.log(`🔗 Connection state with ${userId}: ${state}`)
       
-      if (peerConnection.connectionState === 'failed') {
+      if (state === 'failed') {
         console.error(`❌ Connection failed with ${userId}, attempting to restart...`)
         this.handleConnectionFailure(userId)
-      } else if (peerConnection.connectionState === 'connected') {
+      } else if (state === 'connected') {
         console.log(`✅ Successfully connected to ${userId}`)
         // Reset retry counter on successful connection
         this.connectionRetries.delete(userId)
-      } else if (peerConnection.connectionState === 'disconnected') {
+      } else if (state === 'disconnected') {
         console.warn(`⚠️ Disconnected from ${userId}`)
       }
     }
@@ -765,14 +781,17 @@ class WebRTCHandler {
       console.log(`🔄 Setting remote description (answer) from: ${senderId}`)
       console.log(`📊 Peer connection state before setRemoteDescription: ${peerConnection.signalingState}`)
       
-      await peerConnection.setRemoteDescription(answer)
+      // 🔧 CRITICAL FIX: Check signaling state before setting remote description
+      if (peerConnection.signalingState === 'have-local-offer') {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer))
+        console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
+        console.log(`✅ Successfully processed answer from: ${senderId}`)
+      } else if (peerConnection.signalingState === 'stable') {
+        console.warn(`⚠️ Ignoring duplicate answer from ${senderId} - connection already stable`)
+      } else {
+        console.error(`❌ Invalid signaling state for answer from ${senderId}: ${peerConnection.signalingState}`)
+      }
       
-      console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
-      
-      // Process any pending ICE candidates now that remote description is set
-      await this.processPendingIceCandidates(senderId)
-      
-      console.log(`✅ Successfully processed answer from: ${senderId}`)
     } catch (error) {
       console.error(`❌ Error handling answer from ${senderId}:`, error)
       console.error(`📊 Peer connection state during error: ${peerConnection.signalingState}`)
@@ -1970,7 +1989,7 @@ class WebRTCHandler {
               
               // Update all peer connections with new video track
               const videoTrack = newStream.getVideoTracks()[0]
-              for (const [userId, peerConnection] of Object.entries(this.peerConnections)) {
+              for (const [userId, peerConnection] of this.peerConnections.entries()) {
                   try {
                       const sender = peerConnection.getSenders().find(s => 
                           s.track && s.track.kind === 'video'
