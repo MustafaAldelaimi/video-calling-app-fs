@@ -115,8 +115,7 @@ CELERY_RESULT_BACKEND = REDIS_URL
 # Internationalization
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
-USE_I18N = True
-USE_TZ = True
+USE_I18N = TrueUSE_TZ = True
 
 # Static files
 STATIC_URL = '/static/'

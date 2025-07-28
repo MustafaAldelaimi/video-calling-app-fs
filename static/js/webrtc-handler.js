@@ -6,6 +6,8 @@ class WebRTCHandler {
     this.localStream = null
     this.remoteStream = null
     this.peerConnections = new Map()
+    this.pendingIceCandidates = new Map()
+    this.connectionRetries = new Map()
     this.websocket = null
     this.isScreenSharing = false
     this.isMuted = false
@@ -134,12 +136,14 @@ class WebRTCHandler {
 
       case "webrtc_offer":
         if (data.sender_id !== this.userId) {
+          console.log(`📨 Processing WebRTC offer from: ${data.sender_id}`)
           await this.handleOffer(data.sender_id, data.offer)
         }
         break
 
       case "webrtc_answer":
         if (data.sender_id !== this.userId) {
+          console.log(`📨 Processing WebRTC answer from: ${data.sender_id}`)
           await this.handleAnswer(data.sender_id, data.answer)
         }
         break
@@ -220,6 +224,12 @@ class WebRTCHandler {
   async createPeerConnection(userId) {
     console.log(`🔗 Creating peer connection for user: ${userId}`)
     
+    // Prevent creating duplicate connections
+    if (this.peerConnections.has(userId)) {
+      console.warn(`⚠️ Peer connection already exists for ${userId}, closing old one first`)
+      this.closePeerConnection(userId)
+    }
+    
     const WEBRTC_SERVERS = [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
@@ -296,6 +306,8 @@ class WebRTCHandler {
         this.handleConnectionFailure(userId)
       } else if (peerConnection.connectionState === 'connected') {
         console.log(`✅ Successfully connected to ${userId}`)
+        // Reset retry counter on successful connection
+        this.connectionRetries.delete(userId)
       } else if (peerConnection.connectionState === 'disconnected') {
         console.warn(`⚠️ Disconnected from ${userId}`)
       }
@@ -339,7 +351,7 @@ class WebRTCHandler {
       console.log(`📤 Sending offer to user: ${userId}`)
 
       this.sendWebSocketMessage({
-        type: "offer",
+        type: "webrtc_offer",
         offer: offer,
         target_id: userId,
       })
@@ -364,6 +376,10 @@ class WebRTCHandler {
       await peerConnection.setRemoteDescription(offer)
       
       console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
+      
+      // Process any pending ICE candidates now that remote description is set
+      await this.processPendingIceCandidates(senderId)
+      
       console.log(`📞 Creating answer for: ${senderId}`)
       
       const answer = await peerConnection.createAnswer()
@@ -372,7 +388,7 @@ class WebRTCHandler {
       console.log(`📊 Peer connection state after setLocalDescription: ${peerConnection.signalingState}`)
 
       this.sendWebSocketMessage({
-        type: "answer",
+        type: "webrtc_answer",
         answer: answer,
         target_id: senderId,
       })
@@ -397,6 +413,10 @@ class WebRTCHandler {
       await peerConnection.setRemoteDescription(answer)
       
       console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
+      
+      // Process any pending ICE candidates now that remote description is set
+      await this.processPendingIceCandidates(senderId)
+      
       console.log(`✅ Successfully processed answer from: ${senderId}`)
     } catch (error) {
       console.error(`❌ Error handling answer from ${senderId}:`, error)
@@ -417,12 +437,56 @@ class WebRTCHandler {
       return
     }
 
-    try {
-      await peerConnection.addIceCandidate(candidate)
-      console.log(`✅ ICE candidate added for ${senderId}`)
-    } catch (error) {
-      console.error(`❌ Error handling ICE candidate from ${senderId}:`, error)
+    // Check if peer connection is in the right state for ICE candidates
+    if (peerConnection.remoteDescription) {
+      try {
+        await peerConnection.addIceCandidate(candidate)
+        console.log(`✅ ICE candidate added for ${senderId}`)
+      } catch (error) {
+        console.error(`❌ Error handling ICE candidate from ${senderId}:`, error)
+        console.error(`📊 Peer connection state:`, {
+          signalingState: peerConnection.signalingState,
+          iceConnectionState: peerConnection.iceConnectionState,
+          connectionState: peerConnection.connectionState,
+          hasRemoteDescription: !!peerConnection.remoteDescription
+        })
+      }
+    } else {
+      // Queue ICE candidate for later processing
+      if (!this.pendingIceCandidates.has(senderId)) {
+        this.pendingIceCandidates.set(senderId, [])
+      }
+      this.pendingIceCandidates.get(senderId).push(candidate)
+      console.log(`⏳ Queued ICE candidate from ${senderId} (waiting for remote description)`)
     }
+  }
+
+  async processPendingIceCandidates(senderId) {
+    if (!this.pendingIceCandidates.has(senderId)) {
+      return
+    }
+
+    const candidates = this.pendingIceCandidates.get(senderId)
+    const peerConnection = this.peerConnections.get(senderId)
+    
+    if (!peerConnection || !peerConnection.remoteDescription) {
+      console.warn(`⚠️ Cannot process pending ICE candidates for ${senderId} - peer connection not ready`)
+      return
+    }
+
+    console.log(`🔄 Processing ${candidates.length} pending ICE candidates for ${senderId}`)
+    
+    for (const candidate of candidates) {
+      try {
+        await peerConnection.addIceCandidate(candidate)
+        console.log(`✅ Pending ICE candidate added for ${senderId}`)
+      } catch (error) {
+        console.error(`❌ Error adding pending ICE candidate for ${senderId}:`, error)
+      }
+    }
+    
+    // Clear processed candidates
+    this.pendingIceCandidates.delete(senderId)
   }
 
   async changeVideoQuality(quality) {
@@ -854,17 +918,41 @@ class WebRTCHandler {
       peerConnection.close()
       this.peerConnections.delete(userId)
     }
+    
+    // Clean up pending ICE candidates
+    if (this.pendingIceCandidates.has(userId)) {
+      this.pendingIceCandidates.delete(userId)
+      console.log(`🧹 Cleaned up pending ICE candidates for ${userId}`)
+    }
+    
+    // Clean up retry counters
+    if (this.connectionRetries.has(userId)) {
+      this.connectionRetries.delete(userId)
+      console.log(`🧹 Cleaned up retry counter for ${userId}`)
+    }
   }
 
   async handleConnectionFailure(userId) {
-    console.log(`🔄 Attempting to restart connection with ${userId}`)
+    const MAX_RETRIES = 3
+    const currentRetries = this.connectionRetries.get(userId) || 0
+    
+    if (currentRetries >= MAX_RETRIES) {
+      console.error(`🚫 Max retries (${MAX_RETRIES}) reached for ${userId}. Giving up.`)
+      this.connectionRetries.delete(userId)
+      return
+    }
+    
+    this.connectionRetries.set(userId, currentRetries + 1)
+    const backoffDelay = Math.pow(2, currentRetries) * 2000 // 2s, 4s, 8s
+    
+    console.log(`🔄 Connection retry ${currentRetries + 1}/${MAX_RETRIES} for ${userId} (waiting ${backoffDelay}ms)`)
     
     try {
       // Close existing connection
       this.closePeerConnection(userId)
       
-      // Wait a bit before retrying
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      // Exponential backoff
+      await new Promise(resolve => setTimeout(resolve, backoffDelay))
       
       // Create new connection and restart negotiation
       await this.createPeerConnection(userId)
@@ -916,7 +1004,19 @@ class WebRTCHandler {
 
   sendWebSocketMessage(message) {
     if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+      console.log(`📤 Sending WebSocket message:`, {
+        type: message.type,
+        target_id: message.target_id || 'broadcast',
+        hasOffer: !!message.offer,
+        hasAnswer: !!message.answer,
+        hasCandidate: !!message.candidate
+      })
       this.websocket.send(JSON.stringify(message))
+    } else {
+      console.error(`❌ Cannot send WebSocket message - connection not open:`, {
+        readyState: this.websocket?.readyState,
+        messageType: message.type
+      })
     }
   }
 

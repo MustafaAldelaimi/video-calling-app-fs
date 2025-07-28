@@ -70,9 +70,9 @@ class CallConsumer(AsyncWebsocketConsumer):
             data = json.loads(text_data)
             message_type = data.get('type')
             
-            if message_type == 'offer':
+            if message_type == 'webrtc_offer':
                 await self.handle_webrtc_offer(data)
-            elif message_type == 'answer':
+            elif message_type == 'webrtc_answer':
                 await self.handle_webrtc_answer(data)
             elif message_type == 'ice_candidate':
                 await self.handle_ice_candidate(data)
