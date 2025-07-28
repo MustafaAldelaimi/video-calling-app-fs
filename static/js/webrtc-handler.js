@@ -466,7 +466,7 @@ class WebRTCHandler {
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
         { urls: 'stun:stun4.l.google.com:19302' },
-        // 📱 Add enterprise TURN servers for mobile connectivity
+        // 🌐 ENHANCED TURN servers for NAT traversal (clean list)
         { 
           urls: "turn:openrelay.metered.ca:80",
           username: "openrelayproject",
@@ -482,7 +482,7 @@ class WebRTCHandler {
           username: "openrelayproject", 
           credential: "openrelayproject"
         },
-        // 📱 Mobile-specific TURN servers
+        // Additional reliable TURN servers
         {
           urls: "turn:relay.backups.cz",
           username: "webrtc",
@@ -492,6 +492,22 @@ class WebRTCHandler {
           urls: "turn:relay.backups.cz:3478",
           username: "webrtc",
           credential: "webrtc"
+        },
+        {
+          urls: "turn:relay.backups.cz?transport=tcp",
+          username: "webrtc", 
+          credential: "webrtc"
+        },
+        // Coturn public servers
+        {
+          urls: "turn:numb.viagenie.ca",
+          username: "webrtc@live.com",
+          credential: "muazkh"
+        },
+        {
+          urls: "turn:numb.viagenie.ca?transport=tcp",
+          username: "webrtc@live.com",
+          credential: "muazkh"
         }
       ],
       iceCandidatePoolSize: 10,
@@ -509,11 +525,11 @@ class WebRTCHandler {
     
     // Add to connections map immediately
     this.peerConnections.set(userId, peerConnection)
-    
+
     console.log(`📊 Peer connections after adding ${userId}:`, Array.from(this.peerConnections.keys()))
     
     // 📤 Adding local stream tracks to peer connection
-    console.log(`📤 Adding local stream tracks to peer connection for user: ${userId}`)
+      console.log(`📤 Adding local stream tracks to peer connection for user: ${userId}`)
     
     // Ensure video tracks are ready before adding them
     await this.waitForVideoTracksReady()
@@ -525,7 +541,7 @@ class WebRTCHandler {
     }
     
     // 🔧 MOBILE CODEC FIX: Apply mobile-optimized track constraints before adding
-    this.localStream.getTracks().forEach((track) => {
+      this.localStream.getTracks().forEach((track) => {
       const settings = track.kind === 'video' ? track.getSettings() : null
       console.log(`🎬 Adding ${track.kind} track:`, {
         id: track.id,
@@ -740,8 +756,8 @@ class WebRTCHandler {
       // 🔧 CRITICAL FIX: Check signaling state before setting remote description
       if (peerConnection.signalingState === 'have-local-offer') {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer))
-        console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
-        console.log(`✅ Successfully processed answer from: ${senderId}`)
+      console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
+      console.log(`✅ Successfully processed answer from: ${senderId}`)
       } else if (peerConnection.signalingState === 'stable') {
         console.warn(`⚠️ Ignoring duplicate answer from ${senderId} - connection already stable`)
       } else {
@@ -837,9 +853,9 @@ class WebRTCHandler {
           frameRate: { ideal: this.qualitySettings.video.frameRate, max: 30 },
           facingMode: "user"
         } : {
-          width: { ideal: this.qualitySettings.video.width },
-          height: { ideal: this.qualitySettings.video.height },
-          frameRate: { ideal: this.qualitySettings.video.frameRate },
+            width: { ideal: this.qualitySettings.video.width },
+            height: { ideal: this.qualitySettings.video.height },
+            frameRate: { ideal: this.qualitySettings.video.frameRate },
         }
 
         console.log(`📱 Changing video quality on ${this.isMobile ? 'mobile' : 'desktop'}:`, videoConstraints)
@@ -1317,7 +1333,7 @@ class WebRTCHandler {
       console.error(`❌ Video element not found for user: ${userId}`)
       return
     }
-    
+
     try {
       // Set the stream as the video source
       videoElement.srcObject = stream
@@ -1544,7 +1560,7 @@ class WebRTCHandler {
       muted: videoElement.muted,
       volume: videoElement.volume,
       currentTime: videoElement.currentTime,
-      duration: videoElement.duration
+          duration: videoElement.duration
     })
     
     // Mobile-specific state logging
@@ -1603,9 +1619,9 @@ class WebRTCHandler {
         await videoElement.play()
         playButton.remove()
         console.log(`✅ Manual play started for ${userId}`)
-      } catch (error) {
+    } catch (error) {
         console.error(`❌ Manual play failed for ${userId}:`, error)
-      }
+    }
     }
     
     videoElement.parentElement.appendChild(playButton)
@@ -2381,9 +2397,23 @@ class WebRTCHandler {
                           }
                       })
                       
-                      // 📱 Force ICE restart when no active pairs
-                      console.log(`🔄 MOBILE: No active candidate pairs, forcing ICE restart...`)
-                      peerConnection.restartIce()
+                      // 🚨 Check if all pairs are stuck in waiting state
+                      let waitingPairs = 0
+                      stats.forEach((report) => {
+                          if (report.type === 'candidate-pair' && report.state === 'waiting') {
+                              waitingPairs++
+                          }
+                      })
+                      
+                      if (waitingPairs === candidatePairs && candidatePairs > 0) {
+                          console.log(`🚨 MOBILE CRITICAL: All ${waitingPairs} pairs stuck in WAITING state!`)
+                          console.log(`🔄 MOBILE: Triggering aggressive recovery...`)
+                          this.handleStuckMobileConnection(userId)
+                      } else {
+                          // 📱 Standard ICE restart for other cases
+                          console.log(`🔄 MOBILE: No active candidate pairs, forcing ICE restart...`)
+                          peerConnection.restartIce()
+                      }
                       
                       // 📱 Also check if we're even receiving remote tracks
                       const receivers = peerConnection.getReceivers()
@@ -2528,6 +2558,55 @@ class WebRTCHandler {
       videoElement.onwaiting = () => {
           console.log(`⏳ Video waiting for ${userId}`)
       }
+  }
+
+  /**
+   * 🚨 CRITICAL FIX: Aggressive recovery for stuck candidate pairs  
+   * Called when mobile connections are stuck in "waiting" state
+   */
+  async handleStuckMobileConnection(userId) {
+      console.log(`🚨 MOBILE CRITICAL: Handling stuck connection for ${userId}`)
+      
+      const peerConnection = this.peerConnections.get(userId)
+      if (!peerConnection) {
+          console.warn(`⚠️ No peer connection found for ${userId}`)
+          return
+      }
+      
+      // Step 1: Try ICE restart first
+      console.log(`🔄 MOBILE: Step 1 - ICE restart for ${userId}`)
+      peerConnection.restartIce()
+      
+      // Step 2: If still stuck after 5 seconds, recreate connection
+      setTimeout(async () => {
+          if (peerConnection.iceConnectionState !== 'connected' && 
+              peerConnection.iceConnectionState !== 'completed') {
+              
+              console.log(`🔄 MOBILE: Step 2 - Full connection reset for ${userId}`)
+              
+              // Close and recreate peer connection with fresh TURN allocation
+              this.closePeerConnection(userId)
+              await this.createPeerConnection(userId)
+              
+              // Wait for fresh connection, then restart negotiation
+              setTimeout(async () => {
+                  if (this.shouldInitiateCall(userId)) {
+                      console.log(`🔄 MOBILE: Step 3 - Fresh offer for ${userId}`)
+                      await this.createOffer(userId)
+                  }
+              }, 1000)
+          }
+      }, 5000)
+      
+      // Step 3: Final fallback - request video refresh from sender
+      setTimeout(() => {
+          if (peerConnection.iceConnectionState !== 'connected' && 
+              peerConnection.iceConnectionState !== 'completed') {
+              
+              console.log(`🔄 MOBILE: Step 4 - Requesting sender video refresh for ${userId}`)
+              this.requestSenderVideoRefresh(userId)
+          }
+      }, 10000)
   }
 }
 
