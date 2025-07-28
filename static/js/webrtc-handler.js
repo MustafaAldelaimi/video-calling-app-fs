@@ -457,250 +457,178 @@ class WebRTCHandler {
       this.closePeerConnection(userId)
     }
     
-    const WEBRTC_SERVERS = [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" },
-      { urls: "stun:stun2.l.google.com:19302" },
-      { urls: "stun:stun3.l.google.com:19302" },
-      { urls: "stun:stun4.l.google.com:19302" },
-      { urls: "stun:stun.cloudflare.com:3478" },
-      { urls: "stun:openrelay.metered.ca:80" },
-      { 
-        urls: "turn:openrelay.metered.ca:80",
-        username: "openrelayproject",
-        credential: "openrelayproject"
-      },
-      { 
-        urls: "turn:openrelay.metered.ca:443",
-        username: "openrelayproject", 
-        credential: "openrelayproject"
-      }
-    ]
+    // 🔧 MOBILE CODEC FIX: Enhanced configuration for mobile compatibility
+    const mobileOptimizedConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ],
+      iceCandidatePoolSize: 10,
+      // 📱 Mobile-specific optimizations
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+      // Add bandwidth constraints for mobile
+      ...(this.isMobile && {
+        iceTransportPolicy: 'all'
+      })
+    }
     
-    const peerConnection = new RTCPeerConnection({ 
-      iceServers: WEBRTC_SERVERS,
-      iceCandidatePoolSize: 10
-    })
+    const peerConnection = new RTCPeerConnection(mobileOptimizedConfig)
     
     // 🔧 CRITICAL FIX: Store userId directly on the connection object
     peerConnection._userId = userId
     
     // Add to connections map immediately
     this.peerConnections.set(userId, peerConnection)
-
+    
     console.log(`📊 Peer connections after adding ${userId}:`, Array.from(this.peerConnections.keys()))
-
-    // Add local stream tracks (wait for them to be ready first)
-    if (this.localStream) {
-      console.log(`📤 Adding local stream tracks to peer connection for user: ${userId}`)
-      
-      // Ensure video tracks are ready before adding
-      await this.waitForVideoTracksReady()
-      
-      // Ensure peer connection is in stable state
-      while (peerConnection.signalingState !== 'stable' && peerConnection.signalingState !== 'have-local-offer') {
-        console.log(`⏳ Waiting for peer connection to be ready for tracks. Current state: ${peerConnection.signalingState}`)
-        await new Promise(resolve => setTimeout(resolve, 100))
-      }
-      
-      this.localStream.getTracks().forEach((track) => {
-        const settings = track.kind === 'video' ? track.getSettings() : null
-        console.log(`🎬 Adding ${track.kind} track:`, {
-          id: track.id,
-          label: track.label,
-          enabled: track.enabled,
-          readyState: track.readyState,
-          muted: track.muted,
-          settings: settings
-        })
-        
-        // Check for problematic video tracks before adding
-        if (track.kind === 'video' && settings) {
-          if (settings.width === 1 || settings.height === 1 || settings.width === 0 || settings.height === 0) {
-            console.error(`❌ Attempting to add invalid video track! Settings:`, settings)
-            console.log(`🔄 Retrying track initialization...`)
-            // Don't add this track, it's not ready
-            return
-          } else {
-            console.log(`✅ Adding valid video track ${settings.width}x${settings.height}`)
-          }
-          
-          // Additional video track validation
-          if (!track.enabled) {
-            console.warn(`⚠️ Video track is disabled for ${userId}`)
-            track.enabled = true
-            console.log(`🔄 Enabled video track for ${userId}`)
-          }
-          
-          if (track.muted) {
-            console.warn(`⚠️ Video track is muted for ${userId}`)
-          }
-          
-          if (track.readyState !== 'live') {
-            console.warn(`⚠️ Video track is not live for ${userId}, state: ${track.readyState}`)
-          }
-        }
-        
-        peerConnection.addTrack(track, this.localStream)
-      })
-    } else {
-      console.warn(`⚠️ No local stream available when creating peer connection for user: ${userId}`)
+    
+    // 📤 Adding local stream tracks to peer connection
+    console.log(`📤 Adding local stream tracks to peer connection for user: ${userId}`)
+    
+    // Ensure video tracks are ready before adding them
+    await this.waitForVideoTracksReady()
+    
+    // Wait for signaling state to be stable
+    while (peerConnection.signalingState !== 'stable' && peerConnection.signalingState !== 'have-local-offer') {
+      console.log(`⏳ Waiting for signaling state to be stable, current: ${peerConnection.signalingState}`)
+      await new Promise(resolve => setTimeout(resolve, 100))
     }
-
-    // Handle remote stream
-    peerConnection.ontrack = async (event) => {
-      const stream = event.streams[0]
-      
-      // 🔧 CRITICAL FIX: Get userId from connection object first, then fallback to map lookup
-      let userId = peerConnection._userId
-      
-              if (!userId) {
-          // Fallback: search in peer connections map
-          for (const [id, pc] of this.peerConnections.entries()) {
-            if (pc === peerConnection) {
-              userId = id
-              break
-            }
-          }
-        }
-      
-              if (!userId) {
-          console.error(`❌ Could not determine userId for received stream!`)
-          console.log(`🔍 Available peer connections:`, Array.from(this.peerConnections.keys()))
-          console.log(`🔍 Connection _userId:`, peerConnection._userId)
-          console.log(`🔍 Current peer connection:`, peerConnection)
-          return
-        }
-      
-      console.log(`📹 Received remote stream from user: ${userId}`, stream)
-      
-      // Log stream details
-      const streamInfo = {
-        streamId: stream.id,
-        trackCount: stream.getTracks().length,
-        tracks: stream.getTracks().map(track => ({
-          kind: track.kind,
-          enabled: track.enabled,
-          muted: track.muted,
-          readyState: track.readyState,
-          settings: track.kind === 'video' ? track.getSettings() : null
-        }))
-      }
-      console.log(`🔍 Stream details:`, streamInfo)
-      
-      // Enhanced track debugging for mobile
-      const tracks = stream.getTracks()
-      tracks.forEach((track, index) => {
-        if (track.kind === 'video') {
-          const settings = track.getSettings()
-          console.log(`📐 Video track ${index} settings:`, settings)
-          
-          if (this.isMobile) {
-            console.log(`📱 MOBILE DEBUG: Received video track with settings:`, settings)
-            
-            // Check for problematic dimensions
-            const width = settings.width || 0
-            const height = settings.height || 0
-            
-            if (width <= 1 || height <= 1) {
-              console.error(`❌ Received remote video track with invalid dimensions: ${width}x${height}!`)
-              
-              // Request sender to reinitialize their video track
-              console.log(`🔄 Requesting sender ${userId} to reinitialize video track`)
-              this.requestSenderVideoRefresh(userId)
-            } else {
-              console.log(`✅ Remote video track has valid dimensions: ${width}x${height}`)
-            }
-          }
-        }
-        
-        // Track state monitoring
-        track.onmute = () => {
-          console.log(` 🔇 Video track muted for ${userId}`)
-        }
-        
-        track.onunmute = () => {
-          console.log(`🔊 Video track unmuted for ${userId}`)
-        }
-        
-        track.onended = () => {
-          console.log(` ⚠️ Video track ended for ${userId}`)
-        }
+    
+    // 🔧 MOBILE CODEC FIX: Apply mobile-optimized track constraints before adding
+    this.localStream.getTracks().forEach((track) => {
+      const settings = track.kind === 'video' ? track.getSettings() : null
+      console.log(`🎬 Adding ${track.kind} track:`, {
+        id: track.id,
+        label: track.label,
+        enabled: track.enabled,
+        readyState: track.readyState,
+        muted: track.muted,
+        ...(settings && { width: settings.width, height: settings.height })
       })
       
-      // 📱 MOBILE: Wait for remote video tracks to be ready before attaching
-      let streamReady = true
-      if (this.isMobile) {
-        console.log(`📱 MOBILE DEBUG: Waiting for remote video tracks to initialize...`)
+      if (track.kind === 'video') {
+        // Validate video track dimensions
+        if (settings && (settings.width === 1 || settings.height === 1 || settings.width === 0 || settings.height === 0)) {
+          console.error(`❌ Attempting to add invalid video track!`, settings)
+          return // Don't add this track
+        }
         
-        streamReady = await this.waitForRemoteStreamReady(stream, 5000) // Reduced timeout to 5 seconds
+        // Ensure track is live and enabled
+        if (track.readyState !== 'live') {
+          console.warn(`⚠️ Video track not live:`, track.readyState)
+        }
         
-        if (!streamReady) {
-          console.warn(`⚠️ Remote stream not ready after 5 seconds, trying fallback attachment`)
-          
-          // Try to attach anyway with fallback handling
-          await this.attachStreamWithFallback(userId, stream)
-          return
+        if (track.muted) {
+          console.warn(`⚠️ Video track is muted`)
+        }
+        
+        if (!track.enabled) {
+          console.warn(`⚠️ Video track is disabled`)
+        }
+        
+        console.log(`✅ Adding valid video track ${settings.width}x${settings.height}`)
+        
+        // 📱 MOBILE CODEC FIX: Apply mobile-optimized constraints to track
+        if (this.isMobile && track.applyConstraints) {
+          track.applyConstraints({
+            width: { ideal: 640, max: 720 },
+            height: { ideal: 480, max: 560 },
+            frameRate: { ideal: 24, max: 30 }
+          }).catch(err => {
+            console.warn(`⚠️ Could not apply mobile constraints to track:`, err)
+          })
         }
       }
       
-      // Attach the stream to video element
-      this.attachStreamToVideoElement(userId, stream)
-    }
-
-    // Handle ICE candidates
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log(`🧊 Sending ICE candidate to ${userId}:`, {
-          type: event.candidate.type,
-          protocol: event.candidate.protocol,
-          address: event.candidate.address || 'hidden'
-        })
-        
-        this.sendWebSocketMessage({
-          type: "ice_candidate",
-          candidate: event.candidate,
-          target_id: userId,
-        })
-      } else {
-        console.log(`🏁 ICE gathering complete for ${userId}`)
-      }
-    }
-
-    // Monitor connection state
-    peerConnection.onconnectionstatechange = () => {
-      const state = peerConnection.connectionState
-      console.log(`🔗 Connection state with ${userId}: ${state}`)
+      // Add track with mobile-optimized transceiver
+      const transceiver = peerConnection.addTransceiver(track, {
+        direction: 'sendrecv',
+        streams: [this.localStream]
+      })
       
-      if (state === 'failed') {
-        console.error(`❌ Connection failed with ${userId}, attempting to restart...`)
-        this.handleConnectionFailure(userId)
-      } else if (state === 'connected') {
-        console.log(`✅ Successfully connected to ${userId}`)
-        // Reset retry counter on successful connection
-        this.connectionRetries.delete(userId)
-      } else if (state === 'disconnected') {
-        console.warn(`⚠️ Disconnected from ${userId}`)
+      // 📱 MOBILE CODEC FIX: Set preferred codecs for mobile compatibility
+      if (track.kind === 'video' && transceiver.sender) {
+        this.optimizeVideoSenderForMobile(transceiver.sender, userId)
       }
-    }
-
-    // Monitor ICE connection state
-    peerConnection.oniceconnectionstatechange = () => {
-      console.log(`🧊 ICE connection state with ${userId}:`, peerConnection.iceConnectionState)
-      
-      if (peerConnection.iceConnectionState === 'failed') {
-        console.error(`❌ ICE connection failed with ${userId}`)
-      } else if (peerConnection.iceConnectionState === 'connected') {
-        console.log(`✅ ICE connected to ${userId}`)
-      }
-    }
-
-    // Monitor ICE gathering state
-    peerConnection.onicegatheringstatechange = () => {
-      console.log(`🔍 ICE gathering state with ${userId}:`, peerConnection.iceGatheringState)
-    }
-
+    })
+    
+    // Set up event handlers
+    this.setupPeerConnectionEventHandlers(peerConnection, userId)
+    
     return peerConnection
+  }
+  
+  /**
+   * 📱 MOBILE CODEC FIX: Optimize video sender for mobile compatibility
+   */
+  async optimizeVideoSenderForMobile(sender, userId) {
+    try {
+      console.log(`📱 MOBILE CODEC: Optimizing video sender for ${userId}`)
+      
+      // Get sender capabilities
+      const capabilities = RTCRtpSender.getCapabilities('video')
+      if (!capabilities || !capabilities.codecs) {
+        console.warn(`⚠️ No video capabilities available`)
+        return
+      }
+      
+      console.log(`📹 Available video codecs:`, capabilities.codecs.map(c => c.mimeType))
+      
+      // 📱 Prefer mobile-friendly codecs in order of preference
+      const mobilePreferredCodecs = [
+        'video/VP8',     // Best mobile compatibility
+        'video/H264',    // Good mobile support, hardware acceleration
+        'video/VP9',     // Good compression, newer mobile support
+        'video/AV1'      // Future-proof but limited mobile support
+      ]
+      
+      // Find the best supported codec
+      let selectedCodec = null
+      for (const preferredCodec of mobilePreferredCodecs) {
+        const codec = capabilities.codecs.find(c => 
+          c.mimeType === preferredCodec
+        )
+        if (codec) {
+          selectedCodec = codec
+          console.log(`✅ Selected mobile-compatible codec: ${codec.mimeType}`)
+          break
+        }
+      }
+      
+      if (selectedCodec) {
+        // Get current encoding parameters
+        const params = sender.getParameters()
+        
+        // Set mobile-optimized encoding parameters
+        if (params.encodings && params.encodings.length > 0) {
+          params.encodings[0] = {
+            ...params.encodings[0],
+            // 📱 Mobile-optimized bitrate (lower for better transmission)
+            maxBitrate: this.isMobile ? 500000 : 1000000, // 500kbps for mobile
+            // Ensure stable framerate
+            maxFramerate: 30,
+            // Enable adaptive bitrate
+            adaptivePtime: true,
+            // Disable scalability for mobile compatibility
+            scaleResolutionDownBy: 1
+          }
+          
+          console.log(`📱 MOBILE CODEC: Setting encoding parameters:`, params.encodings[0])
+          
+          await sender.setParameters(params)
+          console.log(`✅ Mobile video encoding optimized for ${userId}`)
+        } else {
+          console.warn(`⚠️ No encodings found in sender parameters`)
+        }
+      } else {
+        console.warn(`⚠️ No mobile-compatible codecs found`)
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error optimizing mobile video codec:`, error)
+    }
   }
 
   async createOffer(userId) {
@@ -2009,6 +1937,259 @@ class WebRTCHandler {
           }
       } catch (error) {
           console.error(`❌ Failed to refresh video track:`, error)
+      }
+  }
+
+  /**
+   * Set up peer connection event handlers
+   */
+  setupPeerConnectionEventHandlers(peerConnection, userId) {
+      // Handle remote stream
+      peerConnection.ontrack = async (event) => {
+          const stream = event.streams[0]
+          
+          // 🔧 CRITICAL FIX: Get userId from connection object first, then fallback to map lookup
+          let trackUserId = peerConnection._userId
+          
+          if (!trackUserId) {
+              // Fallback: search in peer connections map
+              for (const [id, pc] of this.peerConnections.entries()) {
+                  if (pc === peerConnection) {
+                      trackUserId = id
+                      break
+                  }
+              }
+          }
+          
+          if (!trackUserId) {
+              console.error(`❌ Could not determine userId for received stream!`)
+              console.log(`🔍 Available peer connections:`, Array.from(this.peerConnections.keys()))
+              console.log(`🔍 Connection _userId:`, peerConnection._userId)
+              return
+          }
+          
+          console.log(`📹 Received remote stream from user: ${trackUserId}`, stream)
+          
+          // 📱 MOBILE CODEC FIX: Enhanced stream analysis for mobile compatibility
+          const streamInfo = {
+              streamId: stream.id,
+              trackCount: stream.getTracks().length,
+              tracks: stream.getTracks().map(track => ({
+                  kind: track.kind,
+                  enabled: track.enabled,
+                  muted: track.muted,
+                  readyState: track.readyState,
+                  settings: track.kind === 'video' ? track.getSettings() : null
+              }))
+          }
+          console.log(`🔍 Stream details:`, streamInfo)
+          
+          // Enhanced track debugging for mobile
+          const tracks = stream.getTracks()
+          tracks.forEach((track, index) => {
+              if (track.kind === 'video') {
+                  const settings = track.getSettings()
+                  console.log(`📐 Video track ${index} settings:`, settings)
+                  
+                  if (this.isMobile) {
+                      console.log(`📱 MOBILE DEBUG: Received video track with settings:`, settings)
+                      
+                      // Check for problematic dimensions
+                      const width = settings.width || 0
+                      const height = settings.height || 0
+                      
+                      if (width <= 1 || height <= 1) {
+                          console.error(`❌ Received remote video track with invalid dimensions: ${width}x${height}!`)
+                          
+                          // 📱 MOBILE CODEC FIX: Request codec optimization from sender
+                          console.log(`🔄 Requesting codec optimization from ${trackUserId}`)
+                          this.requestSenderVideoRefresh(trackUserId)
+                      } else {
+                          console.log(`✅ Remote video track has valid dimensions: ${width}x${height}`)
+                      }
+                  }
+              }
+              
+              // Track state monitoring
+              track.onmute = () => console.log(`🔇 Video track muted for ${trackUserId}`)
+              track.onunmute = () => console.log(`🔊 Video track unmuted for ${trackUserId}`)
+              track.onended = () => console.log(`⚠️ Video track ended for ${trackUserId}`)
+          })
+          
+          // 📱 MOBILE: Wait for remote video tracks to be ready before attaching
+          let streamReady = true
+          if (this.isMobile) {
+              console.log(`📱 MOBILE DEBUG: Waiting for remote video tracks to initialize...`)
+              
+              streamReady = await this.waitForRemoteStreamReady(stream, 5000)
+              
+              if (!streamReady) {
+                  console.warn(`⚠️ Remote stream not ready after 5 seconds, trying fallback attachment`)
+                  await this.attachStreamWithFallback(trackUserId, stream)
+                  return
+              }
+          }
+          
+          // Attach the stream to video element
+          this.attachStreamToVideoElement(trackUserId, stream)
+      }
+      
+      // Handle ICE candidates
+      peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+              console.log(`🧊 Sending ICE candidate to ${userId}:`, {
+                  type: event.candidate.type,
+                  protocol: event.candidate.protocol,
+                  address: event.candidate.address || 'hidden'
+              })
+              
+              this.sendWebSocketMessage({
+                  type: "ice_candidate",
+                  candidate: event.candidate,
+                  target_id: userId,
+              })
+          } else {
+              console.log(`🏁 ICE gathering complete for ${userId}`)
+          }
+      }
+      
+      // Monitor connection state
+      peerConnection.onconnectionstatechange = () => {
+          const state = peerConnection.connectionState
+          console.log(`🔗 Connection state with ${userId}: ${state}`)
+          
+          if (state === 'failed') {
+              console.error(`❌ Connection failed with ${userId}, attempting to restart...`)
+              this.handleConnectionFailure(userId)
+          } else if (state === 'connected') {
+              console.log(`✅ Successfully connected to ${userId}`)
+              // Reset retry counter on successful connection
+              this.connectionRetries.delete(userId)
+          } else if (state === 'disconnected') {
+              console.warn(`⚠️ Disconnected from ${userId}`)
+          }
+      }
+      
+      // Monitor ICE connection state
+      peerConnection.oniceconnectionstatechange = () => {
+          console.log(`🧊 ICE connection state with ${userId}:`, peerConnection.iceConnectionState)
+          
+          if (peerConnection.iceConnectionState === 'failed') {
+              console.error(`❌ ICE connection failed with ${userId}`)
+          } else if (peerConnection.iceConnectionState === 'connected') {
+              console.log(`✅ ICE connected to ${userId}`)
+          }
+      }
+      
+      // Monitor ICE gathering state
+      peerConnection.onicegatheringstatechange = () => {
+          console.log(`🔍 ICE gathering state with ${userId}:`, peerConnection.iceGatheringState)
+      }
+  }
+
+  /**
+   * 🔄 Handle video refresh request from mobile devices
+   */
+  async handleVideoRefreshRequest(data) {
+      try {
+          const requesterId = data.target_id || data.sender_id
+          console.log(`🔄 Processing video refresh request from: ${requesterId}`)
+          
+          // 📱 MOBILE CODEC FIX: Restart video track with mobile-optimized settings
+          console.log(`📱 MOBILE CODEC: Refreshing video track for mobile compatibility`)
+          
+          // Stop current video tracks
+          if (this.localStream) {
+              const videoTracks = this.localStream.getVideoTracks()
+              videoTracks.forEach(track => {
+                  console.log(`🛑 Stopping current video track: ${track.id}`)
+                  track.stop()
+              })
+          }
+          
+          // Wait a moment for cleanup
+          await new Promise(resolve => setTimeout(resolve, 500))
+          
+          // Request new media with mobile-optimized constraints
+          const mobileOptimizedConstraints = {
+              video: {
+                  width: { ideal: 640, max: 720 },
+                  height: { ideal: 480, max: 560 },
+                  frameRate: { ideal: 24, max: 30 },
+                  // Force specific codec-friendly settings
+                  advanced: [{
+                      width: { min: 320, ideal: 640, max: 720 },
+                      height: { min: 240, ideal: 480, max: 560 },
+                      frameRate: { min: 15, ideal: 24, max: 30 }
+                  }]
+              },
+              audio: {
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true
+              }
+          }
+          
+          console.log(`📱 MOBILE CODEC: Requesting fresh media with constraints:`, mobileOptimizedConstraints)
+          
+          try {
+              const newStream = await navigator.mediaDevices.getUserMedia(mobileOptimizedConstraints)
+              console.log(`✅ Got fresh media stream:`, newStream.id)
+              
+              // Update local stream
+              this.localStream = newStream
+              
+              // Update local video element
+              const localVideo = document.getElementById('localVideo')
+              if (localVideo) {
+                  localVideo.srcObject = newStream
+                  console.log(`✅ Updated local video element`)
+              }
+              
+              // Replace tracks in all peer connections
+              for (const [peerId, peerConnection] of this.peerConnections.entries()) {
+                  if (peerConnection && peerConnection.connectionState === 'connected') {
+                      console.log(`🔄 Replacing video track for peer: ${peerId}`)
+                      
+                      const videoTrack = newStream.getVideoTracks()[0]
+                      if (videoTrack) {
+                          const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video')
+                          if (sender) {
+                              await sender.replaceTrack(videoTrack)
+                              
+                              // 📱 MOBILE CODEC FIX: Re-optimize encoding for the new track
+                              await this.optimizeVideoSenderForMobile(sender, peerId)
+                              
+                              console.log(`✅ Video track replaced and optimized for: ${peerId}`)
+                          } else {
+                              console.warn(`⚠️ No video sender found for peer: ${peerId}`)
+                          }
+                      }
+                  }
+              }
+              
+              console.log(`✅ Video refresh completed successfully`)
+              
+          } catch (error) {
+              console.error(`❌ Failed to get fresh media:`, error)
+              
+              // Fallback: Try with basic constraints
+              try {
+                  const fallbackStream = await navigator.mediaDevices.getUserMedia({
+                      video: { width: 640, height: 480 },
+                      audio: true
+                  })
+                  
+                  this.localStream = fallbackStream
+                  console.log(`✅ Fallback media stream obtained`)
+                  
+              } catch (fallbackError) {
+                  console.error(`❌ Fallback media failed:`, fallbackError)
+              }
+          }
+          
+      } catch (error) {
+          console.error(`❌ Error handling video refresh request:`, error)
       }
   }
 }
