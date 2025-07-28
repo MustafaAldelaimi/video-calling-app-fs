@@ -499,7 +499,7 @@ class WebRTCHandler {
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
       // 🌐 NETWORK FIX: Enhanced ICE transport policy for mobile
-      iceTransportPolicy: this.isMobile ? 'relay' : 'all' // 📱 FORCE TURN relay on mobile!
+      iceTransportPolicy: 'all' // 📱 REMOVED: Force relay was too restrictive!
     }
     
     const peerConnection = new RTCPeerConnection(mobileOptimizedConfig)
@@ -2475,6 +2475,58 @@ class WebRTCHandler {
               console.log(`📱 MOBILE FALLBACK: Showing user notification for connection failure`)
               this.showError(`Unable to connect to ${userId}. Please check your internet connection and try refreshing the page.`)
           }
+      }
+  }
+
+  /**
+   * Set up video element events for debugging and mobile optimization
+   */
+  setupVideoElementEvents(videoElement, userId) {
+      console.log(`🎬 Setting up video element events for ${userId}`)
+      
+      videoElement.onloadedmetadata = () => {
+          console.log(`📊 Video metadata loaded for ${userId}:`, {
+              videoWidth: videoElement.videoWidth,
+              videoHeight: videoElement.videoHeight,
+              duration: videoElement.duration
+          })
+          
+          if (this.isMobile) {
+              console.log(`📱 MOBILE: Video metadata loaded, ensuring playback`)
+              this.ensureMobileVideoPlays(videoElement, userId)
+          }
+      }
+      
+      videoElement.oncanplay = () => {
+          console.log(`▶️ Video can play for ${userId}`)
+          
+          if (this.isMobile && videoElement.paused) {
+              console.log(`📱 MOBILE: Auto-playing video for ${userId}`)
+              videoElement.play().catch(err => {
+                  console.warn(`⚠️ MOBILE: Could not auto-play video for ${userId}:`, err)
+              })
+          }
+      }
+      
+      videoElement.onplay = () => {
+          console.log(`▶️ Video started playing for ${userId}`)
+          
+          if (this.isMobile && videoElement.muted) {
+              console.log(`📱 MOBILE: Unmuting video after play for ${userId}`)
+              videoElement.muted = false
+          }
+      }
+      
+      videoElement.onerror = (error) => {
+          console.error(`❌ Video error for ${userId}:`, error)
+      }
+      
+      videoElement.onstalled = () => {
+          console.warn(`⚠️ Video stalled for ${userId}`)
+      }
+      
+      videoElement.onwaiting = () => {
+          console.log(`⏳ Video waiting for ${userId}`)
       }
   }
 }
