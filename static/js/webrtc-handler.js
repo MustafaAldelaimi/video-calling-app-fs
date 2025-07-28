@@ -13,6 +13,9 @@ class WebRTCHandler {
     this.isMuted = false
     this.isVideoOff = false
 
+    // Detect mobile device
+    this.isMobile = this.detectMobileDevice()
+    
     // Quality settings
     this.qualitySettings = {
       video: { width: 1280, height: 720, frameRate: 30 },
@@ -28,6 +31,13 @@ class WebRTCHandler {
     }
 
     this.setupEventListeners()
+  }
+
+  detectMobileDevice() {
+    const userAgent = navigator.userAgent || navigator.vendor || window.opera
+    const isMobile = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase())
+    console.log(`📱 Device detection: ${isMobile ? 'Mobile' : 'Desktop'}`)
+    return isMobile
   }
 
   async initializeCall() {
@@ -165,7 +175,20 @@ class WebRTCHandler {
   }
 
   async getUserMedia() {
-    const constraints = {
+    // Mobile-friendly constraints
+    const constraints = this.isMobile ? {
+      video: {
+        width: { ideal: 640, max: 1280 },
+        height: { ideal: 480, max: 720 },
+        frameRate: { ideal: 24, max: 30 },
+        facingMode: "user"
+      },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    } : {
       video: {
         width: { ideal: this.qualitySettings.video.width },
         height: { ideal: this.qualitySettings.video.height },
@@ -174,10 +197,13 @@ class WebRTCHandler {
       audio: {
         sampleRate: this.qualitySettings.audio.sampleRate,
         channelCount: this.qualitySettings.audio.channelCount,
+        echoCancellation: true,
+        noiseSuppression: true
       },
     }
 
     try {
+      console.log(`📱 Getting user media with ${this.isMobile ? 'mobile' : 'desktop'} constraints:`, constraints)
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints)
       document.getElementById("localVideo").srcObject = this.localStream
       console.log("📹 Local stream obtained:", this.localStream)
@@ -187,6 +213,25 @@ class WebRTCHandler {
       this.addLocalStreamToExistingPeers()
     } catch (error) {
       console.error("Error accessing media devices:", error)
+      
+      // Fallback to basic constraints on mobile
+      if (this.isMobile) {
+        console.log("📱 Trying fallback mobile constraints...")
+        try {
+          const fallbackConstraints = {
+            video: { facingMode: "user" },
+            audio: true
+          }
+          this.localStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
+          document.getElementById("localVideo").srcObject = this.localStream
+          console.log("✅ Fallback mobile constraints worked!")
+          this.addLocalStreamToExistingPeers()
+          return
+        } catch (fallbackError) {
+          console.error("❌ Fallback constraints also failed:", fallbackError)
+        }
+      }
+      
       throw error
     }
   }
@@ -501,12 +546,21 @@ class WebRTCHandler {
 
       // Get new video stream with updated constraints
       try {
+        const videoConstraints = this.isMobile ? {
+          width: { ideal: this.qualitySettings.video.width, max: 1280 },
+          height: { ideal: this.qualitySettings.video.height, max: 720 },
+          frameRate: { ideal: this.qualitySettings.video.frameRate, max: 30 },
+          facingMode: "user"
+        } : {
+          width: { ideal: this.qualitySettings.video.width },
+          height: { ideal: this.qualitySettings.video.height },
+          frameRate: { ideal: this.qualitySettings.video.frameRate },
+        }
+
+        console.log(`📱 Changing video quality on ${this.isMobile ? 'mobile' : 'desktop'}:`, videoConstraints)
+
         const newStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: this.qualitySettings.video.width },
-            height: { ideal: this.qualitySettings.video.height },
-            frameRate: { ideal: this.qualitySettings.video.frameRate },
-          },
+          video: videoConstraints,
           audio: false,
         })
 
@@ -531,19 +585,57 @@ class WebRTCHandler {
         })
       } catch (error) {
         console.error("Error changing video quality:", error)
+        
+        // Fallback for mobile
+        if (this.isMobile) {
+          console.log("📱 Trying fallback quality change for mobile...")
+          try {
+            const fallbackStream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: "user" },
+              audio: false,
+            })
+            
+            const fallbackTrack = fallbackStream.getVideoTracks()[0]
+            this.localStream.removeTrack(videoTrack)
+            this.localStream.addTrack(fallbackTrack)
+            
+            // Replace in peer connections
+            this.peerConnections.forEach(async (peerConnection) => {
+              const sender = peerConnection.getSenders().find((s) => s.track && s.track.kind === "video")
+              if (sender) {
+                await sender.replaceTrack(fallbackTrack)
+              }
+            })
+            
+            console.log("✅ Fallback quality change worked on mobile")
+          } catch (fallbackError) {
+            console.error("❌ Fallback quality change also failed:", fallbackError)
+          }
+        }
       }
     }
   }
 
   setQualityFromProfile(quality) {
-    const qualityProfiles = {
+    // Mobile-optimized quality profiles
+    const mobileQualityProfiles = {
+      low: { width: 480, height: 320, frameRate: 15 },
+      medium: { width: 640, height: 480, frameRate: 24 },
+      high: { width: 960, height: 720, frameRate: 30 },
+      ultra: { width: 1280, height: 720, frameRate: 30 }, // Cap at 720p for mobile
+    }
+    
+    const desktopQualityProfiles = {
       low: { width: 640, height: 360, frameRate: 15 },
       medium: { width: 1280, height: 720, frameRate: 30 },
       high: { width: 1920, height: 1080, frameRate: 30 },
       ultra: { width: 3840, height: 2160, frameRate: 30 },
     }
 
-    this.qualitySettings.video = qualityProfiles[quality] || qualityProfiles["medium"]
+    const profiles = this.isMobile ? mobileQualityProfiles : desktopQualityProfiles
+    this.qualitySettings.video = profiles[quality] || profiles["medium"]
+    
+    console.log(`📱 Quality set for ${this.isMobile ? 'mobile' : 'desktop'}:`, this.qualitySettings.video)
   }
 
   async toggleScreenShare() {
@@ -759,7 +851,7 @@ class WebRTCHandler {
   }
 
   createVideoElement(userId, username) {
-    console.log(`🖼️ Creating video element for ${username} (${userId})`)
+    console.log(`🖼️ Creating video element for ${username} (${userId}) - Mobile: ${this.isMobile}`)
     
     const videoContainer = document.querySelector('.video-container')
     if (!videoContainer) {
@@ -773,12 +865,27 @@ class WebRTCHandler {
     videoElement.autoplay = true
     videoElement.playsinline = true
     videoElement.muted = false // Allow audio for remote videos
+    
+    // Mobile-specific attributes
+    if (this.isMobile) {
+      videoElement.setAttribute('webkit-playsinline', true)
+      videoElement.setAttribute('x-webkit-airplay', 'allow')
+      videoElement.controls = false
+      // Start muted on mobile and unmute after play starts (helps with autoplay)
+      videoElement.muted = true
+    }
+    
+    // Responsive sizing for mobile
+    const videoSize = this.isMobile ? 
+      { width: 250, height: 180 } : 
+      { width: 300, height: 200 }
+    
     videoElement.style.cssText = `
       position: absolute;
-      width: 300px;
-      height: 200px;
+      width: ${videoSize.width}px;
+      height: ${videoSize.height}px;
       top: 20px;
-      left: ${20 + (Object.keys(this.peerConnections).length * 320)}px;
+      left: ${20 + (Object.keys(this.peerConnections).length * (videoSize.width + 20))}px;
       border: 2px solid #007bff;
       border-radius: 8px;
       z-index: 5;
@@ -830,7 +937,7 @@ class WebRTCHandler {
   }
 
   attachStreamToVideoElement(userId, stream) {
-    console.log(`🔗 Attempting to attach stream for user: ${userId}`)
+    console.log(`🔗 Attempting to attach stream for user: ${userId} (Mobile: ${this.isMobile})`)
     
     const videoElement = document.getElementById(`video-${userId}`)
     
@@ -859,21 +966,92 @@ class WebRTCHandler {
         console.log(`📺 Video metadata loaded for ${userId}:`, {
           videoWidth: videoElement.videoWidth,
           videoHeight: videoElement.videoHeight,
-          duration: videoElement.duration
+          duration: videoElement.duration,
+          readyState: videoElement.readyState
         })
+        
+        // Force play on mobile after metadata is loaded
+        if (this.isMobile) {
+          this.ensureMobileVideoPlays(videoElement, userId)
+        }
       }
       
       videoElement.onplay = () => {
         console.log(`▶️ Video started playing for ${userId}`)
+        // Unmute after video starts playing on mobile
+        if (this.isMobile && videoElement.muted) {
+          console.log(`🔊 Unmuting video for ${userId} after play started`)
+          videoElement.muted = false
+        }
       }
       
       videoElement.onerror = (error) => {
         console.error(`❌ Video error for ${userId}:`, error)
       }
+      
+      videoElement.oncanplay = () => {
+        console.log(`✅ Video can play for ${userId}`)
+        if (this.isMobile) {
+          this.ensureMobileVideoPlays(videoElement, userId)
+        }
+      }
 
     } catch (error) {
       console.error(`❌ Error attaching stream to video element for ${userId}:`, error)
     }
+  }
+
+  async ensureMobileVideoPlays(videoElement, userId) {
+    try {
+      console.log(`📱 Ensuring mobile video plays for ${userId}`)
+      
+      if (videoElement.paused) {
+        const playPromise = videoElement.play()
+        if (playPromise !== undefined) {
+          await playPromise
+          console.log(`✅ Mobile video started playing for ${userId}`)
+        }
+      }
+    } catch (error) {
+      console.warn(`⚠️ Mobile video autoplay failed for ${userId}:`, error.message)
+      
+      // Create play button overlay for manual start if autoplay fails
+      if (error.name === 'NotAllowedError') {
+        this.createPlayButton(videoElement, userId)
+      }
+    }
+  }
+
+  createPlayButton(videoElement, userId) {
+    const playButton = document.createElement('div')
+    playButton.className = 'mobile-play-button'
+    playButton.innerHTML = '▶️ Tap to play'
+    playButton.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 5px;
+      cursor: pointer;
+      z-index: 10;
+      font-size: 14px;
+    `
+    
+    playButton.onclick = async () => {
+      try {
+        await videoElement.play()
+        playButton.remove()
+        console.log(`✅ Manual play started for ${userId}`)
+      } catch (error) {
+        console.error(`❌ Manual play failed for ${userId}:`, error)
+      }
+    }
+    
+    videoElement.parentElement.appendChild(playButton)
+    console.log(`🎮 Created play button for ${userId}`)
   }
 
   removeParticipant(userId) {
