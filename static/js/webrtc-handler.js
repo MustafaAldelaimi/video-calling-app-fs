@@ -386,6 +386,12 @@ class WebRTCHandler {
       // Ensure video tracks are ready before adding
       await this.waitForVideoTracksReady()
       
+      // Ensure peer connection is in stable state
+      while (peerConnection.signalingState !== 'stable' && peerConnection.signalingState !== 'have-local-offer') {
+        console.log(`⏳ Waiting for peer connection to be ready for tracks. Current state: ${peerConnection.signalingState}`)
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+      
       this.localStream.getTracks().forEach((track) => {
         const settings = track.kind === 'video' ? track.getSettings() : null
         console.log(`🎬 Adding ${track.kind} track:`, {
@@ -399,13 +405,28 @@ class WebRTCHandler {
         
         // Check for problematic video tracks before adding
         if (track.kind === 'video' && settings) {
-          if (settings.width === 1 || settings.height === 1) {
-            console.error(`❌ Attempting to add 1x1 video track! Settings:`, settings)
+          if (settings.width === 1 || settings.height === 1 || settings.width === 0 || settings.height === 0) {
+            console.error(`❌ Attempting to add invalid video track! Settings:`, settings)
             console.log(`🔄 Retrying track initialization...`)
             // Don't add this track, it's not ready
             return
           } else {
             console.log(`✅ Adding valid video track ${settings.width}x${settings.height}`)
+          }
+          
+          // Additional video track validation
+          if (!track.enabled) {
+            console.warn(`⚠️ Video track is disabled for ${userId}`)
+            track.enabled = true
+            console.log(`🔄 Enabled video track for ${userId}`)
+          }
+          
+          if (track.muted) {
+            console.warn(`⚠️ Video track is muted for ${userId}`)
+          }
+          
+          if (track.readyState !== 'live') {
+            console.warn(`⚠️ Video track is not live for ${userId}, state: ${track.readyState}`)
           }
         }
         
@@ -1013,6 +1034,10 @@ class WebRTCHandler {
     videoElement.playsinline = true
     videoElement.muted = false // Allow audio for remote videos
     
+    // Critical attributes for video display
+    videoElement.setAttribute('playsinline', true)
+    videoElement.setAttribute('autoplay', true)
+    
     // Mobile-specific attributes
     if (this.isMobile) {
       videoElement.setAttribute('webkit-playsinline', true)
@@ -1020,7 +1045,15 @@ class WebRTCHandler {
       videoElement.controls = false
       // Start muted on mobile and unmute after play starts (helps with autoplay)
       videoElement.muted = true
+    } else {
+      // Desktop-specific optimizations
+      videoElement.setAttribute('disablePictureInPicture', false)
+      videoElement.preload = 'metadata'
     }
+    
+    // Additional attributes that might help with black video
+    videoElement.setAttribute('poster', '') // Prevent default poster
+    videoElement.style.objectFit = 'cover' // Ensure video fills the element
     
     // Responsive sizing for mobile
     const videoSize = this.isMobile ? 
@@ -1036,7 +1069,10 @@ class WebRTCHandler {
       border: 2px solid #007bff;
       border-radius: 8px;
       z-index: 5;
-      background: #000;
+      background: #1a1a1a;
+      object-fit: cover;
+      transform: translateZ(0);
+      will-change: transform;
     `
     
     // Add participant label
@@ -1108,6 +1144,22 @@ class WebRTCHandler {
       videoElement.srcObject = stream
       console.log(`✅ Remote stream attached to video element for user ${userId}`)
       
+      // Force video to start playing (critical for black video fix)
+      setTimeout(async () => {
+        try {
+          if (videoElement.paused) {
+            console.log(`🎬 Force playing video for ${userId}`)
+            await videoElement.play()
+            console.log(`✅ Video force play successful for ${userId}`)
+          }
+        } catch (error) {
+          console.warn(`⚠️ Could not force play video for ${userId}:`, error.message)
+        }
+        
+        // Double-check video state after attempted play
+        this.debugVideoElement(videoElement, userId)
+      }, 500)
+      
       // Add event listeners for debugging
       videoElement.onloadedmetadata = () => {
         console.log(`📺 Video metadata loaded for ${userId}:`, {
@@ -1116,6 +1168,12 @@ class WebRTCHandler {
           duration: videoElement.duration,
           readyState: videoElement.readyState
         })
+        
+        // Check if video has actual content
+        if (videoElement.videoWidth === 0 || videoElement.videoHeight === 0) {
+          console.error(`❌ Video element has 0 dimensions for ${userId}!`)
+          this.debugVideoElement(videoElement, userId)
+        }
         
         // Force play on mobile after metadata is loaded
         if (this.isMobile) {
@@ -1130,10 +1188,26 @@ class WebRTCHandler {
           console.log(`🔊 Unmuting video for ${userId} after play started`)
           videoElement.muted = false
         }
+        
+        // Check video dimensions after play starts
+        setTimeout(() => {
+          console.log(`🔍 Video dimensions after play for ${userId}:`, {
+            videoWidth: videoElement.videoWidth,
+            videoHeight: videoElement.videoHeight,
+            currentTime: videoElement.currentTime,
+            paused: videoElement.paused
+          })
+          
+          if (videoElement.videoWidth === 0 || videoElement.videoHeight === 0) {
+            console.error(`❌ Video still has 0 dimensions after play for ${userId}!`)
+            this.debugVideoElement(videoElement, userId)
+          }
+        }, 1000)
       }
       
       videoElement.onerror = (error) => {
         console.error(`❌ Video error for ${userId}:`, error)
+        this.debugVideoElement(videoElement, userId)
       }
       
       videoElement.oncanplay = () => {
@@ -1141,11 +1215,86 @@ class WebRTCHandler {
         if (this.isMobile) {
           this.ensureMobileVideoPlays(videoElement, userId)
         }
+        
+        // Additional debugging for black video
+        console.log(`🔍 Video canplay state for ${userId}:`, {
+          videoWidth: videoElement.videoWidth,
+          videoHeight: videoElement.videoHeight,
+          readyState: videoElement.readyState,
+          networkState: videoElement.networkState,
+          currentSrc: videoElement.currentSrc,
+          srcObject: !!videoElement.srcObject
+        })
+      }
+
+      // Add more event listeners for debugging
+      videoElement.onloadstart = () => {
+        console.log(`🔄 Video load started for ${userId}`)
+      }
+      
+      videoElement.oncanplaythrough = () => {
+        console.log(`✅ Video can play through for ${userId}`)
+        this.debugVideoElement(videoElement, userId)
+      }
+      
+      videoElement.onwaiting = () => {
+        console.warn(`⏳ Video waiting for data for ${userId}`)
+      }
+      
+      videoElement.onstalled = () => {
+        console.warn(`⚠️ Video stalled for ${userId}`)
+      }
+      
+      videoElement.onsuspend = () => {
+        console.warn(`⏸️ Video suspended for ${userId}`)
       }
 
     } catch (error) {
       console.error(`❌ Error attaching stream to video element for ${userId}:`, error)
     }
+  }
+
+  debugVideoElement(videoElement, userId) {
+    console.log(`🔍 DEBUGGING VIDEO ELEMENT FOR ${userId}:`)
+    console.log(`📐 Dimensions: ${videoElement.videoWidth}x${videoElement.videoHeight}`)
+    console.log(`🎵 Audio tracks: ${videoElement.srcObject ? videoElement.srcObject.getAudioTracks().length : 0}`)
+    console.log(`📹 Video tracks: ${videoElement.srcObject ? videoElement.srcObject.getVideoTracks().length : 0}`)
+    
+    if (videoElement.srcObject) {
+      const tracks = videoElement.srcObject.getTracks()
+      console.log(`🎬 Stream tracks for ${userId}:`)
+      tracks.forEach((track, index) => {
+        const settings = track.kind === 'video' ? track.getSettings() : null
+        console.log(`  Track ${index}:`, {
+          kind: track.kind,
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState,
+          settings: settings
+        })
+        
+        if (track.kind === 'video' && settings) {
+          console.log(`  📐 Video track settings:`, settings)
+          
+          if (settings.width === 0 || settings.height === 0) {
+            console.error(`❌ Video track has 0 dimensions!`)
+          }
+        }
+      })
+    } else {
+      console.error(`❌ No srcObject attached to video element!`)
+    }
+    
+    console.log(`🎮 Video element state:`, {
+      readyState: videoElement.readyState,
+      networkState: videoElement.networkState,
+      paused: videoElement.paused,
+      ended: videoElement.ended,
+      muted: videoElement.muted,
+      volume: videoElement.volume,
+      currentTime: videoElement.currentTime,
+      duration: videoElement.duration
+    })
   }
 
   async ensureMobileVideoPlays(videoElement, userId) {
