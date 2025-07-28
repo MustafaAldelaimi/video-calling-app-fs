@@ -30,9 +30,12 @@ class WebRTCHandler {
 
   async initializeCall() {
     try {
-      await this.setupWebSocket()
+      console.log("🚀 Initializing call...")
       await this.getUserMedia()
+      console.log("✅ User media obtained, setting up WebSocket...")
+      await this.setupWebSocket()
       this.startQualityMonitoring()
+      console.log("🎉 Call initialization complete!")
     } catch (error) {
       console.error("Failed to initialize call:", error)
       this.showError("Failed to initialize call. Please check your camera and microphone permissions.")
@@ -59,34 +62,68 @@ class WebRTCHandler {
   async setupWebSocket() {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
     const wsUrl = `${protocol}//${window.location.host}/ws/call/${this.callId}/`
+    
+    console.log("🌐 Connecting to WebSocket:", wsUrl)
+    console.log("🔒 Protocol:", window.location.protocol, "→", protocol)
 
     this.websocket = new WebSocket(wsUrl)
 
     this.websocket.onopen = () => {
-      console.log("WebSocket connected")
+      console.log("✅ WebSocket connected successfully to:", wsUrl)
+      console.log("🔗 User ID:", this.userId)
+      console.log("📞 Call ID:", this.callId)
     }
 
     this.websocket.onmessage = async (event) => {
       const data = JSON.parse(event.data)
+      console.log("📨 WebSocket message received:", data.type, data)
       await this.handleWebSocketMessage(data)
     }
 
-    this.websocket.onclose = () => {
-      console.log("WebSocket disconnected")
+    this.websocket.onclose = (event) => {
+      console.log("❌ WebSocket disconnected", event.code, event.reason)
     }
 
     this.websocket.onerror = (error) => {
-      console.error("WebSocket error:", error)
+      console.error("🚨 WebSocket error:", error)
+      console.log("📡 Attempting to connect to:", wsUrl)
+      
+      // Show user-friendly error
+      this.showError("Connection failed. Please refresh the page and try again.")
     }
   }
 
   async handleWebSocketMessage(data) {
     switch (data.type) {
+      case "existing_participants":
+        // Handle existing participants when joining a call
+        console.log(`👥 Found ${data.participants.length} existing participants`)
+        for (const participant of data.participants) {
+          this.addParticipant(participant.user_id, participant.username)
+          await this.createPeerConnection(participant.user_id)
+          
+          // Only create offer if our user ID is "smaller" to avoid race conditions
+          if (this.localStream && this.shouldInitiateCall(participant.user_id)) {
+            console.log(`📞 Creating offer for existing participant: ${participant.username} (I'm the initiator)`)
+            await this.createOffer(participant.user_id)
+          } else {
+            console.log(`⏳ Waiting for offer from existing participant: ${participant.username} (They're the initiator)`)
+          }
+        }
+        break
+
       case "user_joined":
         if (data.user_id !== this.userId) {
           this.addParticipant(data.user_id, data.username)
           await this.createPeerConnection(data.user_id)
+          
+          // Only create offer if our user ID is "smaller" to avoid race conditions
+          if (this.shouldInitiateCall(data.user_id)) {
+            console.log(`📞 Creating offer for new participant: ${data.username} (I'm the initiator)`)
           await this.createOffer(data.user_id)
+          } else {
+            console.log(`⏳ Waiting for offer from new participant: ${data.username} (They're the initiator)`)
+          }
         }
         break
 
@@ -139,59 +176,167 @@ class WebRTCHandler {
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints)
       document.getElementById("localVideo").srcObject = this.localStream
+      console.log("📹 Local stream obtained:", this.localStream)
+      console.log("🎬 Local tracks:", this.localStream.getTracks().map(t => `${t.kind}: ${t.label}`))
+      
+      // Add local stream to any existing peer connections
+      this.addLocalStreamToExistingPeers()
     } catch (error) {
       console.error("Error accessing media devices:", error)
       throw error
     }
   }
 
+  addLocalStreamToExistingPeers() {
+    if (!this.localStream) return
+    
+    this.peerConnections.forEach((peerConnection, userId) => {
+      // Check if tracks are already added to avoid duplicates
+      const senders = peerConnection.getSenders()
+      const hasVideoTrack = senders.some(sender => sender.track && sender.track.kind === 'video')
+      const hasAudioTrack = senders.some(sender => sender.track && sender.track.kind === 'audio')
+      
+      if (!hasVideoTrack || !hasAudioTrack) {
+        console.log(`🔄 Adding local stream to existing peer connection for user: ${userId}`)
+        this.localStream.getTracks().forEach((track) => {
+          const existingSender = senders.find(sender => sender.track && sender.track.kind === track.kind)
+          if (!existingSender) {
+            console.log(`➕ Adding ${track.kind} track to existing peer:`, track)
+            peerConnection.addTrack(track, this.localStream)
+          }
+        })
+      }
+    })
+  }
+
+  shouldInitiateCall(otherUserId) {
+    // Use lexicographic comparison of user IDs to determine who initiates
+    // This ensures only one person creates the offer, preventing race conditions
+    const shouldInitiate = this.userId < otherUserId
+    console.log(`🤔 Should I initiate call? My ID: ${this.userId}, Their ID: ${otherUserId}, Result: ${shouldInitiate}`)
+    return shouldInitiate
+  }
+
   async createPeerConnection(userId) {
-    const WEBRTC_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }]
-    const peerConnection = new RTCPeerConnection(WEBRTC_SERVERS)
+    console.log(`🔗 Creating peer connection for user: ${userId}`)
+    
+    const WEBRTC_SERVERS = [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+      { urls: "stun:stun3.l.google.com:19302" },
+      { urls: "stun:stun4.l.google.com:19302" },
+      { urls: "stun:stun.cloudflare.com:3478" },
+      { urls: "stun:openrelay.metered.ca:80" },
+      { 
+        urls: "turn:openrelay.metered.ca:80",
+        username: "openrelayproject",
+        credential: "openrelayproject"
+      },
+      { 
+        urls: "turn:openrelay.metered.ca:443",
+        username: "openrelayproject", 
+        credential: "openrelayproject"
+      }
+    ]
+    
+    const peerConnection = new RTCPeerConnection({ 
+      iceServers: WEBRTC_SERVERS,
+      iceCandidatePoolSize: 10
+    })
     this.peerConnections.set(userId, peerConnection)
 
     // Add local stream tracks
     if (this.localStream) {
+      console.log(`📤 Adding local stream tracks to peer connection for user: ${userId}`)
       this.localStream.getTracks().forEach((track) => {
+        console.log(`🎬 Adding ${track.kind} track:`, track)
         peerConnection.addTrack(track, this.localStream)
       })
+    } else {
+      console.warn(`⚠️ No local stream available when creating peer connection for user: ${userId}`)
     }
 
     // Handle remote stream
     peerConnection.ontrack = (event) => {
-      const remoteVideo = document.getElementById("remoteVideo")
-      if (remoteVideo.srcObject !== event.streams[0]) {
-        remoteVideo.srcObject = event.streams[0]
-        this.remoteStream = event.streams[0]
-      }
+      console.log(`📹 Received remote stream from user: ${userId}`, event.streams[0])
+      console.log(`🔍 Stream details:`, {
+        streamId: event.streams[0].id,
+        tracks: event.streams[0].getTracks().map(t => `${t.kind}: ${t.readyState}`)
+      })
+      
+      this.attachStreamToVideoElement(userId, event.streams[0])
     }
 
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log(`🧊 Sending ICE candidate to ${userId}:`, {
+          type: event.candidate.type,
+          protocol: event.candidate.protocol,
+          address: event.candidate.address || 'hidden'
+        })
+        
         this.sendWebSocketMessage({
           type: "ice_candidate",
           candidate: event.candidate,
           target_id: userId,
         })
+      } else {
+        console.log(`🏁 ICE gathering complete for ${userId}`)
       }
     }
 
     // Monitor connection state
     peerConnection.onconnectionstatechange = () => {
-      console.log(`Connection state with ${userId}:`, peerConnection.connectionState)
+      console.log(`🔗 Connection state with ${userId}:`, peerConnection.connectionState)
+      
+      if (peerConnection.connectionState === 'failed') {
+        console.error(`❌ Connection failed with ${userId}, attempting to restart...`)
+        this.handleConnectionFailure(userId)
+      } else if (peerConnection.connectionState === 'connected') {
+        console.log(`✅ Successfully connected to ${userId}`)
+      } else if (peerConnection.connectionState === 'disconnected') {
+        console.warn(`⚠️ Disconnected from ${userId}`)
+      }
+    }
+
+    // Monitor ICE connection state
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log(`🧊 ICE connection state with ${userId}:`, peerConnection.iceConnectionState)
+      
+      if (peerConnection.iceConnectionState === 'failed') {
+        console.error(`❌ ICE connection failed with ${userId}`)
+      } else if (peerConnection.iceConnectionState === 'connected') {
+        console.log(`✅ ICE connected to ${userId}`)
+      }
+    }
+
+    // Monitor ICE gathering state
+    peerConnection.onicegatheringstatechange = () => {
+      console.log(`🔍 ICE gathering state with ${userId}:`, peerConnection.iceGatheringState)
     }
 
     return peerConnection
   }
 
   async createOffer(userId) {
+    console.log(`📤 Creating offer for user: ${userId}`)
+    
     const peerConnection = this.peerConnections.get(userId)
-    if (!peerConnection) return
+    if (!peerConnection) {
+      console.error(`❌ No peer connection found when creating offer for: ${userId}`)
+      return
+    }
 
     try {
+      console.log(`📊 Peer connection state before creating offer: ${peerConnection.signalingState}`)
+      
       const offer = await peerConnection.createOffer()
       await peerConnection.setLocalDescription(offer)
+      
+      console.log(`📊 Peer connection state after setLocalDescription: ${peerConnection.signalingState}`)
+      console.log(`📤 Sending offer to user: ${userId}`)
 
       this.sendWebSocketMessage({
         type: "offer",
@@ -199,20 +344,32 @@ class WebRTCHandler {
         target_id: userId,
       })
     } catch (error) {
-      console.error("Error creating offer:", error)
+      console.error(`❌ Error creating offer for ${userId}:`, error)
     }
   }
 
   async handleOffer(senderId, offer) {
+    console.log(`📨 Received offer from user: ${senderId}`)
+    
     let peerConnection = this.peerConnections.get(senderId)
     if (!peerConnection) {
+      console.log(`🔗 Creating new peer connection for offer from: ${senderId}`)
       peerConnection = await this.createPeerConnection(senderId)
     }
 
     try {
+      console.log(`🔄 Setting remote description (offer) from: ${senderId}`)
+      console.log(`📊 Peer connection state before setRemoteDescription: ${peerConnection.signalingState}`)
+      
       await peerConnection.setRemoteDescription(offer)
+      
+      console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
+      console.log(`📞 Creating answer for: ${senderId}`)
+      
       const answer = await peerConnection.createAnswer()
       await peerConnection.setLocalDescription(answer)
+      
+      console.log(`📊 Peer connection state after setLocalDescription: ${peerConnection.signalingState}`)
 
       this.sendWebSocketMessage({
         type: "answer",
@@ -225,24 +382,46 @@ class WebRTCHandler {
   }
 
   async handleAnswer(senderId, answer) {
+    console.log(`📨 Received answer from user: ${senderId}`)
+    
     const peerConnection = this.peerConnections.get(senderId)
-    if (!peerConnection) return
+    if (!peerConnection) {
+      console.error(`❌ No peer connection found for answer from: ${senderId}`)
+      return
+    }
 
     try {
+      console.log(`🔄 Setting remote description (answer) from: ${senderId}`)
+      console.log(`📊 Peer connection state before setRemoteDescription: ${peerConnection.signalingState}`)
+      
       await peerConnection.setRemoteDescription(answer)
+      
+      console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
+      console.log(`✅ Successfully processed answer from: ${senderId}`)
     } catch (error) {
-      console.error("Error handling answer:", error)
+      console.error(`❌ Error handling answer from ${senderId}:`, error)
+      console.error(`📊 Peer connection state during error: ${peerConnection.signalingState}`)
     }
   }
 
   async handleIceCandidate(senderId, candidate) {
+    console.log(`🧊 Received ICE candidate from ${senderId}:`, {
+      type: candidate.type,
+      protocol: candidate.protocol,
+      address: candidate.address || 'hidden'
+    })
+    
     const peerConnection = this.peerConnections.get(senderId)
-    if (!peerConnection) return
+    if (!peerConnection) {
+      console.error(`❌ No peer connection found for ICE candidate from: ${senderId}`)
+      return
+    }
 
     try {
       await peerConnection.addIceCandidate(candidate)
+      console.log(`✅ ICE candidate added for ${senderId}`)
     } catch (error) {
-      console.error("Error handling ICE candidate:", error)
+      console.error(`❌ Error handling ICE candidate from ${senderId}:`, error)
     }
   }
 
@@ -493,6 +672,9 @@ class WebRTCHandler {
   }
 
   addParticipant(userId, username) {
+    console.log(`👤 Adding participant: ${username} (${userId})`)
+    
+    // Add to participants list
     const participantsList = document.getElementById("participantsList")
     const participantDiv = document.createElement("div")
     participantDiv.className = "participant-item"
@@ -502,12 +684,167 @@ class WebRTCHandler {
             ${username}
         `
     participantsList.appendChild(participantDiv)
+    
+    // Create video element for this participant
+    this.createVideoElement(userId, username)
+    
+    // Hide "no participants" message
+    this.updateNoParticipantsMessage()
+    
+    console.log(`✅ Participant ${username} added successfully`)
+  }
+
+  createVideoElement(userId, username) {
+    console.log(`🖼️ Creating video element for ${username} (${userId})`)
+    
+    const videoContainer = document.querySelector('.video-container')
+    if (!videoContainer) {
+      console.error("❌ Video container not found!")
+      return
+    }
+    
+    const videoElement = document.createElement('video')
+    videoElement.id = `video-${userId}`
+    videoElement.className = 'video-element remote-video'
+    videoElement.autoplay = true
+    videoElement.playsinline = true
+    videoElement.muted = false // Allow audio for remote videos
+    videoElement.style.cssText = `
+      position: absolute;
+      width: 300px;
+      height: 200px;
+      top: 20px;
+      left: ${20 + (Object.keys(this.peerConnections).length * 320)}px;
+      border: 2px solid #007bff;
+      border-radius: 8px;
+      z-index: 5;
+      background: #000;
+    `
+    
+    // Add participant label
+    const label = document.createElement('div')
+    label.className = 'participant-label'
+    label.textContent = username
+    label.style.cssText = `
+      position: absolute;
+      bottom: 5px;
+      left: 5px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      z-index: 6;
+    `
+    
+    // Add loading indicator
+    const loadingDiv = document.createElement('div')
+    loadingDiv.className = 'video-loading'
+    loadingDiv.textContent = 'Connecting...'
+    loadingDiv.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      font-size: 14px;
+      z-index: 7;
+    `
+    
+    videoElement.appendChild(label)
+    videoElement.appendChild(loadingDiv)
+    videoContainer.appendChild(videoElement)
+    
+    // Store pending stream if we have one
+    if (this.pendingStreams && this.pendingStreams.has(userId)) {
+      console.log(`🔄 Attaching pending stream for ${username}`)
+      this.attachStreamToVideoElement(userId, this.pendingStreams.get(userId))
+      this.pendingStreams.delete(userId)
+    }
+    
+    console.log(`✅ Video element created for ${username}: #video-${userId}`)
+  }
+
+  attachStreamToVideoElement(userId, stream) {
+    console.log(`🔗 Attempting to attach stream for user: ${userId}`)
+    
+    const videoElement = document.getElementById(`video-${userId}`)
+    
+    if (!videoElement) {
+      console.warn(`⏳ Video element not found for ${userId}, storing stream for later`)
+      // Store stream for when video element is created
+      if (!this.pendingStreams) {
+        this.pendingStreams = new Map()
+      }
+      this.pendingStreams.set(userId, stream)
+      return
+    }
+
+    try {
+      // Remove loading indicator
+      const loadingDiv = videoElement.querySelector('.video-loading')
+      if (loadingDiv) {
+        loadingDiv.remove()
+      }
+
+      videoElement.srcObject = stream
+      console.log(`✅ Remote stream attached to video element for user ${userId}`)
+      
+      // Add event listeners for debugging
+      videoElement.onloadedmetadata = () => {
+        console.log(`📺 Video metadata loaded for ${userId}:`, {
+          videoWidth: videoElement.videoWidth,
+          videoHeight: videoElement.videoHeight,
+          duration: videoElement.duration
+        })
+      }
+      
+      videoElement.onplay = () => {
+        console.log(`▶️ Video started playing for ${userId}`)
+      }
+      
+      videoElement.onerror = (error) => {
+        console.error(`❌ Video error for ${userId}:`, error)
+      }
+
+    } catch (error) {
+      console.error(`❌ Error attaching stream to video element for ${userId}:`, error)
+    }
   }
 
   removeParticipant(userId) {
+    console.log(`👤 Removing participant: ${userId}`)
+    
+    // Remove from participants list
     const participantElement = document.getElementById(`participant-${userId}`)
     if (participantElement) {
       participantElement.remove()
+    }
+    
+    // Remove video element
+    const videoElement = document.getElementById(`video-${userId}`)
+    if (videoElement) {
+      videoElement.remove()
+    }
+    
+    // Clean up pending streams
+    if (this.pendingStreams && this.pendingStreams.has(userId)) {
+      console.log(`🗑️ Cleaning up pending stream for ${userId}`)
+      this.pendingStreams.delete(userId)
+    }
+    
+    // Update "no participants" message
+    this.updateNoParticipantsMessage()
+    
+    console.log(`✅ Participant ${userId} removed successfully`)
+  }
+
+  updateNoParticipantsMessage() {
+    const noParticipantsMessage = document.getElementById("noParticipantsMessage")
+    const hasParticipants = this.peerConnections.size > 0
+    
+    if (noParticipantsMessage) {
+      noParticipantsMessage.style.display = hasParticipants ? 'none' : 'block'
     }
   }
 
@@ -516,6 +853,29 @@ class WebRTCHandler {
     if (peerConnection) {
       peerConnection.close()
       this.peerConnections.delete(userId)
+    }
+  }
+
+  async handleConnectionFailure(userId) {
+    console.log(`🔄 Attempting to restart connection with ${userId}`)
+    
+    try {
+      // Close existing connection
+      this.closePeerConnection(userId)
+      
+      // Wait a bit before retrying
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      
+      // Create new connection and restart negotiation
+      await this.createPeerConnection(userId)
+      
+      if (this.shouldInitiateCall(userId)) {
+        console.log(`🔄 Restarting offer for ${userId}`)
+        await this.createOffer(userId)
+      }
+      
+    } catch (error) {
+      console.error(`❌ Failed to restart connection with ${userId}:`, error)
     }
   }
 

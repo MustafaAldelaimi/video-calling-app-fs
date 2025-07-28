@@ -69,24 +69,34 @@ WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
 # Database
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DATABASE_URL', default=config('DB_NAME', default='video_calling_db')),
-        'USER': config('DB_USER', default='postgres'),
-        'PASSWORD': config('DB_PASSWORD', default='cool25'),
-        'HOST': config('DB_HOST', default='localhost'),
-        'PORT': config('DB_PORT', default='5432'),
-    }
-}
+import dj_database_url
 
-# Railway Database URL support
-if config('DATABASE_URL', default=None):
-    import dj_database_url
-    DATABASES['default'] = dj_database_url.parse(config('DATABASE_URL'))
+DATABASE_URL = config('DATABASE_URL', default=None)
+if DATABASE_URL:
+    # Use Railway's DATABASE_URL
+    DATABASES = {
+        'default': dj_database_url.parse(DATABASE_URL)
+    }
+else:
+    # Fallback to local database for development
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': config('DB_NAME', default='video_calling_db'),
+            'USER': config('DB_USER', default='postgres'),
+            'PASSWORD': config('DB_PASSWORD', default='cool25'),
+            'HOST': config('DB_HOST', default='localhost'),
+            'PORT': config('DB_PORT', default='5432'),
+        }
+    }
 
 # Redis Configuration
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379')
+
+# For Railway, check for REDIS_PRIVATE_URL or REDIS_URL
+REDIS_PRIVATE_URL = config('REDIS_PRIVATE_URL', default=None)
+if REDIS_PRIVATE_URL:
+    REDIS_URL = REDIS_PRIVATE_URL
 
 # Channels
 CHANNEL_LAYERS = {

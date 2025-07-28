@@ -1,8 +1,6 @@
 import uuid
 from django.db import models
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
+from django.conf import settings
 
 CALL_TYPE_CHOICES = [
     ('audio', 'Audio Only'),
@@ -21,8 +19,8 @@ CALL_STATUS_CHOICES = [
 class CallSession(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     call_id = models.UUIDField(default=uuid.uuid4, unique=True)
-    initiator = models.ForeignKey(User, on_delete=models.CASCADE, related_name='initiated_calls')
-    participants = models.ManyToManyField(User, through='CallParticipant')
+    initiator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='initiated_calls')
+    participants = models.ManyToManyField(settings.AUTH_USER_MODEL, through='CallParticipant')
     call_type = models.CharField(max_length=20, choices=CALL_TYPE_CHOICES, default='video')
     status = models.CharField(max_length=20, choices=CALL_STATUS_CHOICES, default='waiting')
     started_at = models.DateTimeField(auto_now_add=True)
@@ -41,7 +39,7 @@ class CallSession(models.Model):
 class CallParticipant(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     call_session = models.ForeignKey(CallSession, on_delete=models.CASCADE)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     joined_at = models.DateTimeField(auto_now_add=True)
     left_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
@@ -52,7 +50,7 @@ class CallParticipant(models.Model):
 class CallQualityMetrics(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     call_session = models.ForeignKey(CallSession, on_delete=models.CASCADE)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     timestamp = models.DateTimeField(auto_now_add=True)
     bandwidth_kbps = models.IntegerField(default=0)
     latency_ms = models.IntegerField(default=0)

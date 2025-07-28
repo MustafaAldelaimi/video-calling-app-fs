@@ -10,6 +10,13 @@
                 <h4 class="text-center"><i class="fas fa-user-plus"></i> Register</h4>
             </div>
             <div class="card-body">
+                {% if request.GET.next and 'call' in request.GET.next %}
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle"></i>
+                        <strong>Joining a call?</strong> Create an account first, then you'll be redirected to the call room.
+                    </div>
+                {% endif %}
+                
                 <form method="post">
                     {% csrf_token %}
                     

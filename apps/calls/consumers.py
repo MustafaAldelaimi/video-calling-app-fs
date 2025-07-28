@@ -28,6 +28,13 @@ class CallConsumer(AsyncWebsocketConsumer):
         # Add user to call participants
         await self.add_participant_to_call()
         
+        # Send existing participants to new joiner
+        existing_participants = await self.get_existing_participants()
+        await self.send(text_data=json.dumps({
+            'type': 'existing_participants',
+            'participants': existing_participants
+        }))
+        
         # Notify others that user joined
         await self.channel_layer.group_send(
             self.call_group_name,
@@ -231,3 +238,22 @@ class CallConsumer(AsyncWebsocketConsumer):
             participant.save()
         except CallParticipant.DoesNotExist:
             pass
+
+    @database_sync_to_async
+    def get_existing_participants(self):
+        try:
+            call_session = CallSession.objects.get(call_id=self.call_id)
+            participants = CallParticipant.objects.filter(
+                call_session=call_session,
+                is_active=True
+            ).exclude(user=self.user).select_related('user')
+            
+            return [
+                {
+                    'user_id': str(p.user.id),
+                    'username': p.user.username
+                }
+                for p in participants
+            ]
+        except CallSession.DoesNotExist:
+            return []

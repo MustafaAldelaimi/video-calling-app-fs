@@ -7,10 +7,17 @@
 <div class="row">
     <!-- Main Video Area -->
     <div class="col-md-9">
-        <div class="video-container" style="height: 500px;">
-            <video id="remoteVideo" class="video-element" autoplay playsinline></video>
+        <div class="video-container" style="height: 500px; background: #1a1a1a; border-radius: 8px; position: relative;">
+            <!-- Dynamic video elements will be created here -->
             <video id="localVideo" class="video-element" autoplay playsinline muted 
-                   style="position: absolute; top: 10px; right: 10px; width: 200px; height: 150px; z-index: 10;"></video>
+                   style="position: absolute; top: 10px; right: 10px; width: 200px; height: 150px; z-index: 10; border: 2px solid #28a745; border-radius: 8px;"></video>
+            
+            <!-- Welcome message when no participants -->
+            <div id="noParticipantsMessage" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #fff;">
+                <i class="fas fa-users fa-3x mb-3"></i>
+                <h4>Waiting for participants...</h4>
+                <p>Share the call ID with others to join</p>
+            </div>
             
             <div class="video-controls">
                 <button id="muteBtn" class="control-btn mute" title="Mute/Unmute">
