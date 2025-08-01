@@ -404,7 +404,7 @@ class WebRTCHandler {
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
       // 🌐 NETWORK FIX: Enhanced ICE transport policy for mobile
-      iceTransportPolicy: this.isMobile ? 'relay' : 'all' // 📱 FORCE TURN relay on mobile!
+      iceTransportPolicy: 'all'
     }
     
     const peerConnection = new RTCPeerConnection(mobileOptimizedConfig)
@@ -1667,48 +1667,6 @@ class WebRTCHandler {
           
           console.log(`📹 Received remote stream from user: ${trackUserId}`, stream)
           
-          // 🌐 NETWORK FIX: Enhanced stream debugging for mobile black video issue
-          if (this.isMobile) {
-              console.log(`📱 MOBILE STREAM DEBUG: Detailed analysis for ${trackUserId}`)
-              console.log(`📱 Stream ID: ${stream.id}`)
-              console.log(`📱 Stream active: ${stream.active}`)
-              console.log(`📱 Stream track count: ${stream.getTracks().length}`)
-              
-              stream.getTracks().forEach((track, index) => {
-                  console.log(`📱 Track ${index}:`, {
-                      kind: track.kind,
-                      id: track.id,
-                      label: track.label,
-                      enabled: track.enabled,
-                      muted: track.muted,
-                      readyState: track.readyState,
-                      settings: track.getSettings()
-                  })
-                  
-                  if (track.kind === 'video') {
-                      const settings = track.getSettings()
-                      console.log(`📱 VIDEO TRACK SETTINGS:`, settings)
-                      
-                      // Check for invalid dimensions
-                      if (settings.width <= 1 || settings.height <= 1) {
-                          console.error(`❌ MOBILE: Received invalid video track ${settings.width}x${settings.height}`)
-                      } else {
-                          console.log(`✅ MOBILE: Valid video track ${settings.width}x${settings.height}`)
-                      }
-                      
-                      // Force video track to be enabled and unmuted
-                      if (track.muted) {
-                          console.log(`📱 MOBILE: Attempting to unmute video track`)
-                      }
-                      
-                      if (!track.enabled) {
-                          console.log(`📱 MOBILE: Attempting to enable video track`)
-                          track.enabled = true
-                      }
-                  }
-              })
-          }
-          
           // 📱 MOBILE CODEC FIX: Enhanced stream analysis for mobile compatibility
           const streamInfo = {
               streamId: stream.id,
@@ -1755,33 +1713,6 @@ class WebRTCHandler {
               track.onended = () => console.log(`⚠️ Video track ended for ${trackUserId}`)
           })
           
-          // 🌐 NETWORK FIX: Skip waiting for mobile - attach immediately if we have valid tracks
-          if (this.isMobile) {
-              console.log(`📱 MOBILE: Immediate stream attachment (bypassing readiness check)`)
-              
-              // Check if we have valid video tracks before attaching
-              const videoTracks = stream.getVideoTracks()
-              if (videoTracks.length > 0) {
-                  const videoTrack = videoTracks[0]
-                  const settings = videoTrack.getSettings()
-                  
-                  if (settings.width > 1 && settings.height > 1) {
-                      console.log(`📱 MOBILE: Valid video track found, attaching directly`)
-                      this.attachStreamToVideoElement(trackUserId, stream)
-                      return
-                  } else {
-                      console.warn(`📱 MOBILE: Video track has invalid dimensions, still attaching anyway`)
-                  }
-              } else {
-                  console.warn(`📱 MOBILE: No video tracks found in stream`)
-              }
-              
-              // Always try to attach on mobile
-              this.attachStreamToVideoElement(trackUserId, stream)
-              return
-          }
-          
-          // Desktop: Original behavior
           // 📱 MOBILE: Wait for remote video tracks to be ready before attaching
           let streamReady = true
           if (this.isMobile) {
@@ -2031,45 +1962,6 @@ class WebRTCHandler {
                   
                   if (candidatePairs === 0) {
                       console.warn(`⚠️ MOBILE: No candidate pairs found, potential NAT/firewall issue`)
-                  } else if (!activePair) {
-                      console.error(`❌ MOBILE: ${candidatePairs} candidate pairs but NONE are active! Diagnosing...`)
-                      
-                      // 🌐 NETWORK FIX: Debug all candidate pairs when none are active
-                      stats.forEach((report) => {
-                          if (report.type === 'candidate-pair') {
-                              console.log(`📱 CANDIDATE PAIR:`, {
-                                  state: report.state,
-                                  priority: report.priority,
-                                  nominated: report.nominated,
-                                  selected: report.selected,
-                                  bytesReceived: report.bytesReceived,
-                                  bytesSent: report.bytesSent,
-                                  localCandidateId: report.localCandidateId,
-                                  remoteCandidateId: report.remoteCandidateId
-                              })
-                          }
-                      })
-                      
-                      // 📱 Force ICE restart when no active pairs
-                      console.log(`🔄 MOBILE: No active candidate pairs, forcing ICE restart...`)
-                      peerConnection.restartIce()
-                      
-                      // 📱 Also check if we're even receiving remote tracks
-                      const receivers = peerConnection.getReceivers()
-                      console.log(`📱 MOBILE RECEIVERS: ${receivers.length} total`)
-                      
-                      receivers.forEach((receiver, index) => {
-                          console.log(`📱 Receiver ${index}:`, {
-                              track: receiver.track ? {
-                                  kind: receiver.track.kind,
-                                  id: receiver.track.id,
-                                  enabled: receiver.track.enabled,
-                                  muted: receiver.track.muted,
-                                  readyState: receiver.track.readyState,
-                                  settings: receiver.track.getSettings()
-                              } : null
-                          })
-                      })
                   }
               }).catch(err => {
                   console.warn(`⚠️ Could not get connection stats:`, err)
