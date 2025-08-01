@@ -171,12 +171,6 @@ class WebRTCHandler {
       case "screen_share_stop":
         this.showScreenShareNotification(data.username, false)
         break
-
-      case "request_video_refresh":
-        // Handle request to refresh our video track
-        console.log(`🔄 Handling video refresh request:`, data)
-        await this.handleVideoRefreshRequest(data)
-        break
     }
   }
 
@@ -445,22 +439,9 @@ class WebRTCHandler {
     // Handle remote stream
     peerConnection.ontrack = async (event) => {
       const stream = event.streams[0]
-      
-      // Fix: Proper userId resolution from the peer connection
-      let userId = null
-      for (const [id, pc] of Object.entries(this.peerConnections)) {
-        if (pc === peerConnection) {
-          userId = id
-          break
-        }
-      }
-      
-      if (!userId) {
-        console.error(`❌ Could not determine userId for received stream!`)
-        console.log(`🔍 Available peer connections:`, Object.keys(this.peerConnections))
-        console.log(`🔍 Current peer connection:`, peerConnection)
-        return
-      }
+      const userId = Object.keys(this.peerConnections).find(id => 
+        this.peerConnections[id] === peerConnection
+      )
       
       console.log(`📹 Received remote stream from user: ${userId}`, stream)
       
@@ -492,15 +473,11 @@ class WebRTCHandler {
             const width = settings.width || 0
             const height = settings.height || 0
             
-                                    if (width <= 1 || height <= 1) {
-                            console.error(`❌ Received remote video track with invalid dimensions: ${width}x${height}!`)
-                            
-                            // Request sender to reinitialize their video track
-                            console.log(`🔄 Requesting sender ${userId} to reinitialize video track`)
-                            this.requestSenderVideoRefresh(userId)
-                        } else {
-                            console.log(`✅ Remote video track has valid dimensions: ${width}x${height}`)
-                        }
+            if (width <= 1 || height <= 1) {
+              console.error(`❌ Received remote video track with invalid dimensions: ${width}x${height}!`)
+            } else {
+              console.log(`✅ Remote video track has valid dimensions: ${width}x${height}`)
+            }
           }
         }
         
@@ -518,21 +495,16 @@ class WebRTCHandler {
         }
       })
       
-                  // 📱 MOBILE: Wait for remote video tracks to be ready before attaching
-            let streamReady = true
-            if (this.isMobile) {
-                console.log(`📱 MOBILE DEBUG: Waiting for remote video tracks to initialize...`)
-                
-                streamReady = await this.waitForRemoteStreamReady(stream, 5000) // Reduced timeout to 5 seconds
-                
-                if (!streamReady) {
-                    console.warn(`⚠️ Remote stream not ready after 5 seconds, trying fallback attachment`)
-                    
-                    // Try to attach anyway with fallback handling
-                    await this.attachStreamWithFallback(userId, stream)
-                    return
-                }
-            }
+      // 📱 MOBILE: Wait for remote video tracks to be ready before attaching
+      if (this.isMobile) {
+        console.log(`📱 MOBILE DEBUG: Waiting for remote video tracks to initialize...`)
+        
+        const streamReady = await this.waitForRemoteStreamReady(stream, 10000)
+        
+        if (!streamReady) {
+          console.warn(`⚠️ Remote stream not ready, but proceeding anyway`)
+        }
+      }
       
       // Attach the stream to video element
       this.attachStreamToVideoElement(userId, stream)
@@ -1548,118 +1520,6 @@ class WebRTCHandler {
     }
     
     return allReady
-  }
-
-  /**
-   * Request sender to refresh their video track if we receive invalid dimensions
-   */
-  requestSenderVideoRefresh(userId) {
-      console.log(`🔄 Requesting ${userId} to refresh their video track due to invalid dimensions`)
-      
-      // Send a custom message to request video refresh
-      const message = {
-          type: 'request_video_refresh',
-          target_id: userId,
-          reason: 'invalid_dimensions'
-      }
-      
-      this.sendWebSocketMessage(message)
-  }
-
-  /**
-   * Attach stream with fallback handling for problematic tracks
-   */
-  async attachStreamWithFallback(userId, stream) {
-      console.log(`📱 MOBILE FALLBACK: Attempting to attach stream with 0x0 dimensions for ${userId}`)
-      
-      const videoElement = document.getElementById(`video-${userId}`)
-      if (!videoElement) {
-          console.error(`❌ Video element not found for fallback attachment: ${userId}`)
-          return
-      }
-      
-      try {
-          // Attach the stream anyway
-          videoElement.srcObject = stream
-          console.log(`⚠️ Fallback: Stream attached despite 0x0 dimensions for ${userId}`)
-          
-          // Set up a monitor to check if dimensions appear later
-          let attempts = 0
-          const maxAttempts = 30 // 15 seconds
-          
-          const dimensionMonitor = setInterval(() => {
-              attempts++
-              
-              if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
-                  console.log(`✅ Fallback success: Video dimensions appeared: ${videoElement.videoWidth}x${videoElement.videoHeight}`)
-                  clearInterval(dimensionMonitor)
-                  
-                  // Try to play the video now that it has dimensions
-                  videoElement.play().catch(error => {
-                      console.warn(`⚠️ Could not play video after dimensions appeared:`, error)
-                  })
-                  
-                  return
-              }
-              
-              if (attempts >= maxAttempts) {
-                  console.warn(`⚠️ Fallback timeout: Video dimensions never appeared for ${userId}`)
-                  clearInterval(dimensionMonitor)
-                  
-                  // Last resort: request sender to restart their video
-                  this.requestSenderVideoRefresh(userId)
-              }
-              
-              console.log(`📱 FALLBACK MONITOR ${attempts}/${maxAttempts}: Still waiting for dimensions (${videoElement.videoWidth}x${videoElement.videoHeight})`)
-          }, 500)
-          
-      } catch (error) {
-          console.error(`❌ Fallback attachment failed for ${userId}:`, error)
-      }
-  }
-
-  /**
-   * Handle request to refresh our local video track
-   */
-  async handleVideoRefreshRequest(data) {
-      console.log(`🔄 Handling video refresh request:`, data)
-      
-      try {
-          // Get fresh video stream
-          const newStream = await this.getUserMedia()
-          
-          if (newStream) {
-              console.log(`✅ Got fresh video stream, updating peer connections`)
-              
-              // Update local video element
-              const localVideo = document.getElementById('localVideo')
-              if (localVideo) {
-                  localVideo.srcObject = newStream
-              }
-              
-              // Update all peer connections with new video track
-              const videoTrack = newStream.getVideoTracks()[0]
-              for (const [userId, peerConnection] of Object.entries(this.peerConnections)) {
-                  try {
-                      const sender = peerConnection.getSenders().find(s => 
-                          s.track && s.track.kind === 'video'
-                      )
-                      
-                      if (sender) {
-                          await sender.replaceTrack(videoTrack)
-                          console.log(`✅ Replaced video track for ${userId}`)
-                      }
-                  } catch (error) {
-                      console.error(`❌ Failed to replace video track for ${userId}:`, error)
-                  }
-              }
-              
-              // Update local stream reference
-              this.localStream = newStream
-          }
-      } catch (error) {
-          console.error(`❌ Failed to refresh video track:`, error)
-      }
   }
 }
 
