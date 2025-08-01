@@ -210,24 +210,6 @@ class WebRTCHandler {
 
     try {
       console.log(`📱 Getting user media with ${this.isMobile ? 'mobile' : 'desktop'} constraints:`, constraints)
-      
-      // Mobile-specific debugging
-      if (this.isMobile) {
-        console.log(`📱 MOBILE DEBUG: Starting getUserMedia on mobile device`)
-        console.log(`📱 MOBILE DEBUG: User agent:`, navigator.userAgent)
-        console.log(`📱 MOBILE DEBUG: Screen dimensions:`, screen.width, 'x', screen.height)
-        console.log(`📱 MOBILE DEBUG: Viewport:`, window.innerWidth, 'x', window.innerHeight)
-        
-        // Check for iOS Safari specific issues
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-        const isSafari = /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
-        console.log(`📱 MOBILE DEBUG: iOS: ${isIOS}, Safari: ${isSafari}`)
-        
-        if (isIOS) {
-          console.log(`🍎 iOS SPECIFIC: Applying iOS Safari video fixes`)
-        }
-      }
-      
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints)
       document.getElementById("localVideo").srcObject = this.localStream
       console.log("📹 Local stream obtained:", this.localStream)
@@ -245,33 +227,6 @@ class WebRTCHandler {
         }
       }))
       
-      // Mobile-specific track debugging
-      if (this.isMobile) {
-        console.log(`📱 MOBILE DEBUG: Local tracks analysis`)
-        localTracks.forEach((track, index) => {
-          if (track.kind === 'video') {
-            const settings = track.getSettings()
-            console.log(`📱 MOBILE VIDEO TRACK ${index}:`, {
-              width: settings.width,
-              height: settings.height,
-              frameRate: settings.frameRate,
-              facingMode: settings.facingMode,
-              deviceId: settings.deviceId,
-              groupId: settings.groupId
-            })
-            
-            // Check for common mobile issues
-            if (!settings.width || !settings.height) {
-              console.error(`📱 MOBILE ERROR: Video track has no dimensions!`)
-            }
-            
-            if (settings.width < 100 || settings.height < 100) {
-              console.error(`📱 MOBILE ERROR: Video track dimensions too small: ${settings.width}x${settings.height}`)
-            }
-          }
-        })
-      }
-      
       // Check local video tracks for issues
       const videoTracks = localTracks.filter(t => t.kind === 'video')
       videoTracks.forEach((track, index) => {
@@ -284,32 +239,10 @@ class WebRTCHandler {
           console.log(`✅ Local video track has valid dimensions: ${settings.width}x${settings.height}`)
         }
         
-        // Mobile-specific validation
-        if (this.isMobile) {
-          console.log(`📱 MOBILE DEBUG: Validating video track for mobile`)
-          
-          // Check if track is actually producing video
-          if (track.readyState !== 'live') {
-            console.error(`📱 MOBILE ERROR: Video track not live: ${track.readyState}`)
-          }
-          
-          if (track.muted) {
-            console.error(`📱 MOBILE ERROR: Video track is muted`)
-          }
-          
-          if (!track.enabled) {
-            console.error(`📱 MOBILE ERROR: Video track is disabled`)
-          }
-        }
-        
         // Wait a moment and check again to see if dimensions change
         setTimeout(() => {
           const newSettings = track.getSettings()
           console.log(`🔄 Local video track settings after 1s:`, newSettings)
-          
-          if (this.isMobile) {
-            console.log(`📱 MOBILE DEBUG: Track settings after 1s:`, newSettings)
-          }
         }, 1000)
       })
       
@@ -321,22 +254,6 @@ class WebRTCHandler {
     } catch (error) {
       console.error("Error accessing media devices:", error)
       
-      // Mobile-specific error handling
-      if (this.isMobile) {
-        console.error(`📱 MOBILE ERROR: getUserMedia failed on mobile:`, error)
-        console.log(`📱 MOBILE DEBUG: Error name: ${error.name}`)
-        console.log(`📱 MOBILE DEBUG: Error message: ${error.message}`)
-        
-        // Common mobile errors
-        if (error.name === 'NotAllowedError') {
-          console.error(`📱 MOBILE ERROR: Permission denied - user needs to allow camera/microphone`)
-        } else if (error.name === 'NotFoundError') {
-          console.error(`📱 MOBILE ERROR: No camera/microphone found`)
-        } else if (error.name === 'OverconstrainedError') {
-          console.error(`📱 MOBILE ERROR: Constraints too restrictive for mobile device`)
-        }
-      }
-      
       // Fallback to basic constraints on mobile
       if (this.isMobile) {
         console.log("📱 Trying fallback mobile constraints...")
@@ -345,25 +262,13 @@ class WebRTCHandler {
             video: { facingMode: "user" },
             audio: true
           }
-          console.log(`📱 MOBILE DEBUG: Trying ultra-basic constraints:`, fallbackConstraints)
-          
           this.localStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
           document.getElementById("localVideo").srcObject = this.localStream
           console.log("✅ Fallback mobile constraints worked!")
-          
-          // Debug the fallback stream
-          const fallbackTracks = this.localStream.getTracks()
-          console.log(`📱 MOBILE DEBUG: Fallback stream tracks:`, fallbackTracks.map(t => ({
-            kind: t.kind,
-            settings: t.kind === 'video' ? t.getSettings() : null
-          })))
-          
-          await this.waitForVideoTracksReady()
           this.addLocalStreamToExistingPeers()
           return
         } catch (fallbackError) {
           console.error("❌ Fallback constraints also failed:", fallbackError)
-          console.error(`📱 MOBILE ERROR: Even basic constraints failed:`, fallbackError)
         }
       }
       
@@ -1159,13 +1064,6 @@ class WebRTCHandler {
   createVideoElement(userId, username) {
     console.log(`🖼️ Creating video element for ${username} (${userId}) - Mobile: ${this.isMobile}`)
     
-    // Mobile-specific debugging
-    if (this.isMobile) {
-      console.log(`📱 MOBILE DEBUG: Creating video element on mobile for ${username}`)
-      console.log(`📱 MOBILE DEBUG: Current device orientation:`, screen.orientation ? screen.orientation.angle : 'unknown')
-      console.log(`📱 MOBILE DEBUG: Viewport size:`, window.innerWidth, 'x', window.innerHeight)
-    }
-    
     const videoContainer = document.querySelector('.video-container')
     if (!videoContainer) {
       console.error("❌ Video container not found!")
@@ -1185,33 +1083,11 @@ class WebRTCHandler {
     
     // Mobile-specific attributes
     if (this.isMobile) {
-      console.log(`📱 MOBILE DEBUG: Applying mobile-specific video attributes`)
-      
-      // iOS Safari specific attributes
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-      if (isIOS) {
-        console.log(`🍎 iOS SPECIFIC: Setting iOS Safari video attributes`)
-        videoElement.setAttribute('webkit-playsinline', 'true')
-        videoElement.setAttribute('playsinline', 'true') 
-        videoElement.setAttribute('muted', 'true') // iOS requires muted for autoplay
-        videoElement.setAttribute('autoplay', 'true')
-        videoElement.playsInline = true
-        videoElement.webkitPlaysInline = true
-      } else {
-        // Android specific
-        console.log(`🤖 ANDROID SPECIFIC: Setting Android video attributes`)
-        videoElement.setAttribute('webkit-playsinline', true)
-        videoElement.setAttribute('x-webkit-airplay', 'allow')
-      }
-      
+      videoElement.setAttribute('webkit-playsinline', true)
+      videoElement.setAttribute('x-webkit-airplay', 'allow')
       videoElement.controls = false
       // Start muted on mobile and unmute after play starts (helps with autoplay)
       videoElement.muted = true
-      
-      // Additional mobile attributes
-      videoElement.setAttribute('preload', 'metadata')
-      videoElement.setAttribute('crossorigin', 'anonymous')
-      
     } else {
       // Desktop-specific optimizations
       videoElement.setAttribute('disablePictureInPicture', false)
@@ -1292,50 +1168,14 @@ class WebRTCHandler {
   attachStreamToVideoElement(userId, stream) {
     console.log(`🔗 Attempting to attach stream for user: ${userId} (Mobile: ${this.isMobile})`)
     
-    // Enhanced mobile debugging
-    if (this.isMobile) {
-      console.log(`📱 MOBILE DEBUG: Attaching stream to video element on mobile`)
-      console.log(`📱 MOBILE DEBUG: Stream details:`, {
-        id: stream.id,
-        active: stream.active,
-        trackCount: stream.getTracks().length
-      })
-      
-      // Analyze each track
-      stream.getTracks().forEach((track, index) => {
-        const trackInfo = {
-          kind: track.kind,
-          enabled: track.enabled,
-          muted: track.muted,
-          readyState: track.readyState,
-          settings: track.kind === 'video' ? track.getSettings() : null
-        }
-        console.log(`📱 MOBILE TRACK ${index}:`, trackInfo)
-        
-        // Check for 0 dimensions on video tracks
-        if (track.kind === 'video') {
-          const settings = track.getSettings()
-          const width = settings.width || 0
-          const height = settings.height || 0
-          console.log(`📱 MOBILE DEBUG: Video track dimensions: ${width}x${height}`)
-          
-          if (width === 0 || height === 0) {
-            console.warn(`⚠️ Mobile video track has 0 dimensions - this may cause display issues`)
-            
-            // Try to force track re-initialization
-            if (this.isMobile) {
-              console.log(`🔄 Attempting to force mobile video track refresh...`)
-              // Set up a listener for when the track gets proper dimensions
-              this.monitorTrackDimensions(track, userId)
-            }
-          }
-        }
-      })
-    }
-    
     const videoElement = document.getElementById(`video-${userId}`)
     if (!videoElement) {
-      console.error(`❌ Video element not found for user: ${userId}`)
+      console.warn(`⏳ Video element not found for ${userId}, storing stream for later`)
+      // Store stream for when video element is created
+      if (!this.pendingStreams) {
+        this.pendingStreams = new Map()
+      }
+      this.pendingStreams.set(userId, stream)
       return
     }
 
@@ -1344,161 +1184,25 @@ class WebRTCHandler {
       videoElement.srcObject = stream
       console.log(`✅ Remote stream attached to video element for user ${userId}`)
       
-      // Enhanced mobile debugging after attachment
-      if (this.isMobile) {
-        console.log(`📱 MOBILE DEBUG: Stream attached, checking video element state`)
-        console.log(`📱 MOBILE DEBUG: Video element properties:`, {
-          autoplay: videoElement.autoplay,
-          playsinline: videoElement.playsInline,
-          muted: videoElement.muted,
-          controls: videoElement.controls,
-          readyState: videoElement.readyState,
-          networkState: videoElement.networkState,
-          paused: videoElement.paused,
-          ended: videoElement.ended
-        })
-      }
-      
-      // Force play after a short delay to ensure stream is attached
+      // Force video to start playing (critical for black video fix)
       setTimeout(async () => {
         try {
           if (videoElement.paused) {
             console.log(`🎬 Force playing video for ${userId}`)
-            
-            if (this.isMobile) {
-              console.log(`📱 MOBILE DEBUG: Attempting to force play on mobile`)
-              
-              // Multiple attempts for mobile
-              await this.tryAlternativeMobilePlay(videoElement, userId)
-            } else {
-              await videoElement.play()
-            }
-            
+            await videoElement.play()
             console.log(`✅ Video force play successful for ${userId}`)
-            
-            if (this.isMobile) {
-              console.log(`📱 MOBILE DEBUG: Video play successful on mobile`)
-            }
           }
           
           // Debug video element after play attempt
           this.debugVideoElement(videoElement, userId)
           
         } catch (error) {
-          console.error(`❌ Error forcing video play for ${userId}:`, error)
-          
-          if (this.isMobile) {
-            console.log(`📱 MOBILE DEBUG: Force play failed, trying alternative mobile play`)
-            await this.tryAlternativeMobilePlay(videoElement, userId)
-          }
+          console.warn(`⚠️ Could not force play video for ${userId}:`, error.message)
         }
       }, 500)
       
     } catch (error) {
       console.error(`❌ Error attaching stream to video element for ${userId}:`, error)
-      
-      if (this.isMobile) {
-        console.error(`📱 MOBILE DEBUG: Stream attachment failed:`, error)
-        
-        // Try alternative attachment method for mobile
-        setTimeout(() => {
-          this.tryAlternativeMobileAttachment(videoElement, stream, userId)
-        }, 1000)
-      }
-    }
-    
-    // Set up video element event listeners with mobile-specific handling
-    this.setupVideoElementEvents(videoElement, userId, stream)
-  }
-
-  /**
-   * Monitor video track dimensions and refresh when they become available
-   */
-  monitorTrackDimensions(track, userId, maxAttempts = 50) {
-    let attempts = 0
-    
-    const checkDimensions = () => {
-      attempts++
-      const settings = track.getSettings()
-      const width = settings.width || 0
-      const height = settings.height || 0
-      
-      console.log(`📱 MOBILE DEBUG: Track dimension check ${attempts}/${maxAttempts}: ${width}x${height}`)
-      
-      if (width > 0 && height > 0) {
-        console.log(`✅ Track dimensions available: ${width}x${height}`)
-        
-        // Try to refresh the video element
-        const videoElement = document.getElementById(`video-${userId}`)
-        if (videoElement && videoElement.srcObject) {
-          console.log(`🔄 Refreshing video element with proper dimensions`)
-          this.debugVideoElement(videoElement, userId)
-        }
-        return
-      }
-      
-      if (attempts < maxAttempts) {
-        setTimeout(checkDimensions, 200)
-      } else {
-        console.warn(`⚠️ Track dimensions never became available for ${userId}`)
-      }
-    }
-    
-    checkDimensions()
-  }
-
-  /**
-   * Alternative stream attachment method for mobile
-   */
-  async tryAlternativeMobileAttachment(videoElement, stream, userId) {
-    console.log(`📱 MOBILE DEBUG: Trying alternative stream attachment for ${userId}`)
-    
-    try {
-      // Method 1: Clear and re-attach
-      videoElement.srcObject = null
-      await new Promise(resolve => setTimeout(resolve, 100))
-      videoElement.srcObject = stream
-      
-      console.log(`📱 MOBILE DEBUG: Alternative attachment method 1 completed`)
-      
-      // Try to play after re-attachment
-      setTimeout(async () => {
-        try {
-          await videoElement.play()
-          console.log(`✅ Alternative attachment successful for ${userId}`)
-        } catch (error) {
-          console.warn(`⚠️ Alternative attachment play failed:`, error)
-          
-          // Method 2: Create a new video element
-          this.recreateMobileVideoElement(userId, stream)
-        }
-      }, 500)
-      
-    } catch (error) {
-      console.error(`❌ Alternative attachment failed:`, error)
-    }
-  }
-
-  /**
-   * Recreate video element for mobile if all else fails
-   */
-  recreateMobileVideoElement(userId, stream) {
-    console.log(`📱 MOBILE DEBUG: Recreating video element for ${userId}`)
-    
-    const oldElement = document.getElementById(`video-${userId}`)
-    if (oldElement && oldElement.parentNode) {
-      // Create new video element
-      const newElement = this.createVideoElement(userId, this.participants.get(userId) || 'Unknown')
-      
-      // Replace old element
-      oldElement.parentNode.replaceChild(newElement, oldElement)
-      
-      // Attach stream to new element
-      setTimeout(() => {
-        newElement.srcObject = stream
-        newElement.play().catch(console.error)
-        console.log(`📱 MOBILE DEBUG: Video element recreated for ${userId}`)
-      }, 100)
     }
   }
 
@@ -1507,22 +1211,6 @@ class WebRTCHandler {
     console.log(`📐 Dimensions: ${videoElement.videoWidth}x${videoElement.videoHeight}`)
     console.log(`🎵 Audio tracks: ${videoElement.srcObject ? videoElement.srcObject.getAudioTracks().length : 0}`)
     console.log(`📹 Video tracks: ${videoElement.srcObject ? videoElement.srcObject.getVideoTracks().length : 0}`)
-    
-    // Mobile-specific debugging
-    if (this.isMobile) {
-      console.log(`📱 MOBILE DEBUG: Detailed video element analysis for ${userId}`)
-      console.log(`📱 MOBILE DEBUG: Video element dimensions: ${videoElement.videoWidth}x${videoElement.videoHeight}`)
-      console.log(`📱 MOBILE DEBUG: CSS dimensions: ${videoElement.offsetWidth}x${videoElement.offsetHeight}`)
-      console.log(`📱 MOBILE DEBUG: Display style:`, window.getComputedStyle(videoElement).display)
-      console.log(`📱 MOBILE DEBUG: Visibility:`, window.getComputedStyle(videoElement).visibility)
-      
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-      if (isIOS) {
-        console.log(`🍎 iOS SPECIFIC: Checking iOS-specific video properties`)
-        console.log(`🍎 iOS playsInline:`, videoElement.playsInline)
-        console.log(`🍎 iOS webkitPlaysInline:`, videoElement.webkitPlaysInline)
-      }
-    }
     
     if (videoElement.srcObject) {
       const tracks = videoElement.srcObject.getTracks()
@@ -1542,19 +1230,11 @@ class WebRTCHandler {
           
           if (settings.width === 0 || settings.height === 0) {
             console.error(`❌ Video track has 0 dimensions!`)
-            
-            if (this.isMobile) {
-              console.error(`📱 MOBILE ERROR: Zero dimensions detected on mobile - this is likely the cause of black video`)
-            }
           }
         }
       })
     } else {
       console.error(`❌ No srcObject attached to video element!`)
-      
-      if (this.isMobile) {
-        console.error(`📱 MOBILE ERROR: No stream attached to video element on mobile`)
-      }
     }
     
     console.log(`🎮 Video element state:`, {
@@ -1567,17 +1247,6 @@ class WebRTCHandler {
       currentTime: videoElement.currentTime,
           duration: videoElement.duration
     })
-    
-    // Mobile-specific state logging
-    if (this.isMobile) {
-      console.log(`📱 MOBILE DEBUG: Mobile-specific video state:`, {
-        autoplay: videoElement.autoplay,
-        playsInline: videoElement.playsInline,
-        controls: videoElement.controls,
-        preload: videoElement.preload,
-        crossOrigin: videoElement.crossOrigin
-      })
-    }
   }
 
   async ensureMobileVideoPlays(videoElement, userId) {
