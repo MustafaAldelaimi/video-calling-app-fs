@@ -207,41 +207,7 @@ class WebRTCHandler {
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints)
       document.getElementById("localVideo").srcObject = this.localStream
       console.log("📹 Local stream obtained:", this.localStream)
-      
-      // Detailed local track analysis
-      const localTracks = this.localStream.getTracks()
-      console.log("🎬 Local tracks:", localTracks.map(t => {
-        const settings = t.kind === 'video' ? t.getSettings() : null
-        return {
-          kind: t.kind,
-          label: t.label,
-          enabled: t.enabled,
-          readyState: t.readyState,
-          settings: settings
-        }
-      }))
-      
-      // Check local video tracks for issues
-      const videoTracks = localTracks.filter(t => t.kind === 'video')
-      videoTracks.forEach((track, index) => {
-        const settings = track.getSettings()
-        console.log(`📐 Local video track ${index} settings:`, settings)
-        
-        if (settings.width === 1 || settings.height === 1) {
-          console.error(`❌ Local video track has 1x1 dimensions! This will cause issues.`)
-        } else {
-          console.log(`✅ Local video track has valid dimensions: ${settings.width}x${settings.height}`)
-        }
-        
-        // Wait a moment and check again to see if dimensions change
-        setTimeout(() => {
-          const newSettings = track.getSettings()
-          console.log(`🔄 Local video track settings after 1s:`, newSettings)
-        }, 1000)
-      })
-      
-      // Wait for video tracks to be properly initialized before adding to peer connections
-      await this.waitForVideoTracksReady()
+      console.log("🎬 Local tracks:", this.localStream.getTracks().map(t => `${t.kind}: ${t.label}`))
       
       // Add local stream to any existing peer connections
       this.addLocalStreamToExistingPeers()
@@ -268,50 +234,6 @@ class WebRTCHandler {
       
       throw error
     }
-  }
-
-  async waitForVideoTracksReady() {
-    if (!this.localStream) return
-    
-    const videoTracks = this.localStream.getVideoTracks()
-    if (videoTracks.length === 0) return
-    
-    console.log("⏳ Waiting for video tracks to be ready...")
-    
-    for (const track of videoTracks) {
-      await this.waitForTrackReady(track)
-    }
-    
-    console.log("✅ All video tracks are ready!")
-  }
-  
-  async waitForTrackReady(track, timeout = 5000) {
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now()
-      
-      const checkTrack = () => {
-        const settings = track.getSettings()
-        
-        // Check if track has valid dimensions
-        if (settings.width && settings.height && settings.width > 1 && settings.height > 1) {
-          console.log(`✅ Video track ready: ${settings.width}x${settings.height}`)
-          resolve()
-          return
-        }
-        
-        // Check timeout
-        if (Date.now() - startTime > timeout) {
-          console.warn(`⚠️ Video track timeout after ${timeout}ms, proceeding anyway. Current settings:`, settings)
-          resolve() // Don't reject, just proceed
-          return
-        }
-        
-        // Try again in 100ms
-        setTimeout(checkTrack, 100)
-      }
-      
-      checkTrack()
-    })
   }
 
   addLocalStreamToExistingPeers() {
@@ -379,36 +301,11 @@ class WebRTCHandler {
     })
     this.peerConnections.set(userId, peerConnection)
 
-    // Add local stream tracks (wait for them to be ready first)
+    // Add local stream tracks
     if (this.localStream) {
       console.log(`📤 Adding local stream tracks to peer connection for user: ${userId}`)
-      
-      // Ensure video tracks are ready before adding
-      await this.waitForVideoTracksReady()
-      
       this.localStream.getTracks().forEach((track) => {
-        const settings = track.kind === 'video' ? track.getSettings() : null
-        console.log(`🎬 Adding ${track.kind} track:`, {
-          id: track.id,
-          label: track.label,
-          enabled: track.enabled,
-          readyState: track.readyState,
-          muted: track.muted,
-          settings: settings
-        })
-        
-        // Check for problematic video tracks before adding
-        if (track.kind === 'video' && settings) {
-          if (settings.width === 1 || settings.height === 1) {
-            console.error(`❌ Attempting to add 1x1 video track! Settings:`, settings)
-            console.log(`🔄 Retrying track initialization...`)
-            // Don't add this track, it's not ready
-            return
-          } else {
-            console.log(`✅ Adding valid video track ${settings.width}x${settings.height}`)
-          }
-        }
-        
+        console.log(`🎬 Adding ${track.kind} track:`, track)
         peerConnection.addTrack(track, this.localStream)
       })
     } else {
@@ -418,53 +315,9 @@ class WebRTCHandler {
     // Handle remote stream
     peerConnection.ontrack = (event) => {
       console.log(`📹 Received remote stream from user: ${userId}`, event.streams[0])
-      
-      // Detailed track debugging
-      const tracks = event.streams[0].getTracks()
       console.log(`🔍 Stream details:`, {
         streamId: event.streams[0].id,
-        trackCount: tracks.length,
-        tracks: tracks.map(t => ({
-          kind: t.kind,
-          id: t.id,
-          label: t.label,
-          enabled: t.enabled,
-          readyState: t.readyState,
-          muted: t.muted,
-          settings: t.kind === 'video' ? t.getSettings() : null
-        }))
-      })
-      
-      // Check for empty video tracks
-      const videoTracks = tracks.filter(t => t.kind === 'video')
-      videoTracks.forEach((track, index) => {
-        if (track.kind === 'video') {
-          const settings = track.getSettings()
-          console.log(`📐 Video track ${index} settings:`, settings)
-          
-          if (settings.width === 1 || settings.height === 1) {
-            console.error(`❌ Received 1x1 video track from ${userId}! This suggests an issue with video transmission.`)
-            
-            // Try to request a new stream from the sender
-            console.log(`🔄 Requesting fresh video stream from ${userId}`)
-            setTimeout(() => {
-              this.requestFreshVideoStream(userId)
-            }, 2000)
-          }
-          
-          // Monitor track state changes
-          track.onended = () => {
-            console.warn(`⚠️ Video track ended for ${userId}`)
-          }
-          
-          track.onmute = () => {
-            console.warn(`🔇 Video track muted for ${userId}`)
-          }
-          
-          track.onunmute = () => {
-            console.log(`🔊 Video track unmuted for ${userId}`)
-          }
-        }
+        tracks: event.streams[0].getTracks().map(t => `${t.kind}: ${t.readyState}`)
       })
       
       this.attachStreamToVideoElement(userId, event.streams[0])
@@ -1254,33 +1107,6 @@ class WebRTCHandler {
     if (this.connectionRetries.has(userId)) {
       this.connectionRetries.delete(userId)
       console.log(`🧹 Cleaned up retry counter for ${userId}`)
-    }
-  }
-
-  async requestFreshVideoStream(userId) {
-    try {
-      console.log(`🔄 Requesting fresh video stream from ${userId}`)
-      
-      const peerConnection = this.peerConnections.get(userId)
-      if (!peerConnection) return
-      
-      // Close and recreate the peer connection
-      this.closePeerConnection(userId)
-      
-      // Wait a moment for cleanup
-      await new Promise(resolve => setTimeout(resolve, 500))
-      
-      // Recreate the connection
-      await this.createPeerConnection(userId)
-      
-      // Restart negotiation if we're the initiator
-      if (this.shouldInitiateCall(userId)) {
-        console.log(`🔄 Creating fresh offer for ${userId}`)
-        await this.createOffer(userId)
-      }
-      
-    } catch (error) {
-      console.error(`❌ Failed to request fresh video stream from ${userId}:`, error)
     }
   }
 
