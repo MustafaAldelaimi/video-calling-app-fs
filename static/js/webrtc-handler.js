@@ -44,7 +44,7 @@ class WebRTCHandler {
       console.log("🚀 Initializing call...")
       
       // Clean up any leftover elements from previous sessions
-      this.cleanupOrphanedElements()
+      this.cleanupOrphanedElementsStrict()
       
       await this.getUserMedia()
       console.log("✅ User media obtained, now enumerating cameras with full permissions...")
@@ -1153,31 +1153,8 @@ class WebRTCHandler {
   }
 
   cleanupOrphanedElements() {
-    // Get all participant elements and video elements
-    const participantElements = document.querySelectorAll('[id^="participant-"]')
-    const videoElements = document.querySelectorAll('[id^="video-"]')
-    
-    // Track which userIds actually have peer connections
-    const activeUserIds = new Set(this.peerConnections.keys())
-    
-    // Remove participant elements that don't have active peer connections
-    participantElements.forEach(element => {
-      const userId = element.id.replace('participant-', '')
-      if (!activeUserIds.has(userId)) {
-        console.log(`🧹 Removing orphaned participant element: ${userId}`)
-        element.remove()
-      }
-    })
-    
-    // Remove video elements that don't have active peer connections
-    videoElements.forEach(element => {
-      const userId = element.id.replace('video-', '')
-      // Skip local video
-      if (userId !== 'localVideo' && !activeUserIds.has(userId)) {
-        console.log(`🧹 Removing orphaned video element: ${userId}`)
-        element.remove()
-      }
-    })
+    // Only remove duplicates, not elements that might be waiting for peer connections
+    console.log("🧹 Cleaning up duplicate elements only...")
     
     // Remove duplicate participant elements (same userId)
     const seenUserIds = new Set()
@@ -1207,6 +1184,39 @@ class WebRTCHandler {
         }
       }
     })
+  }
+
+  cleanupOrphanedElementsStrict() {
+    // More aggressive cleanup - only use when connections are fully closed
+    console.log("🧹 Performing strict cleanup of orphaned elements...")
+    
+    const participantElements = document.querySelectorAll('[id^="participant-"]')
+    const videoElements = document.querySelectorAll('[id^="video-"]')
+    
+    // Track which userIds actually have peer connections
+    const activeUserIds = new Set(this.peerConnections.keys())
+    
+    // Remove participant elements that don't have active peer connections
+    participantElements.forEach(element => {
+      const userId = element.id.replace('participant-', '')
+      if (!activeUserIds.has(userId)) {
+        console.log(`🧹 Removing orphaned participant element: ${userId}`)
+        element.remove()
+      }
+    })
+    
+    // Remove video elements that don't have active peer connections
+    videoElements.forEach(element => {
+      const userId = element.id.replace('video-', '')
+      // Skip local video
+      if (userId !== 'localVideo' && !activeUserIds.has(userId)) {
+        console.log(`🧹 Removing orphaned video element: ${userId}`)
+        element.remove()
+      }
+    })
+    
+    // Also clean up duplicates
+    this.cleanupOrphanedElements()
   }
 
   createVideoElement(userId, username) {
@@ -1471,6 +1481,9 @@ class WebRTCHandler {
     
     // Update video layout for remaining participants
     this.updateVideoLayout()
+    
+    // Perform strict cleanup when participants actually leave
+    this.cleanupOrphanedElementsStrict()
     
     // Update "no participants" message
     this.updateNoParticipantsMessage()
