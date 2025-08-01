@@ -12,6 +12,10 @@ class WebRTCHandler {
     this.isScreenSharing = false
     this.isMuted = false
     this.isVideoOff = false
+    this.currentCameraId = null
+    this.availableCameras = []
+    this.screenStream = null
+    this.deviceChangeListener = null
 
     // Quality settings
     this.qualitySettings = {
@@ -28,15 +32,39 @@ class WebRTCHandler {
     }
 
     this.setupEventListeners()
+    
+    // Set initial button states
+    this.updateMuteButton()
+    this.updateVideoButton()
+    this.updateScreenShareButton()
   }
 
   async initializeCall() {
     try {
       console.log("🚀 Initializing call...")
+      
+      // Clean up any leftover elements from previous sessions
+      this.cleanupOrphanedElements()
+      
       await this.getUserMedia()
-      console.log("✅ User media obtained, setting up WebSocket...")
+      console.log("✅ User media obtained, now enumerating cameras with full permissions...")
+      await this.enumerateCameras()
+      console.log("📷 Camera enumeration complete, setting up device monitoring...")
+      this.setupDeviceChangeListener()
+      console.log("🔌 Device change monitoring active, setting up WebSocket...")
       await this.setupWebSocket()
       this.startQualityMonitoring()
+      
+      // Re-enumerate cameras after a short delay to catch any that might have been missed
+      setTimeout(async () => {
+        console.log("🔄 Re-enumerating cameras after initialization...")
+        const initialCount = this.availableCameras.length
+        await this.enumerateCameras()
+        if (this.availableCameras.length > initialCount) {
+          console.log(`📷 Found ${this.availableCameras.length - initialCount} additional camera(s) on re-enumeration`)
+        }
+      }, 2000)
+      
       console.log("🎉 Call initialization complete!")
     } catch (error) {
       console.error("Failed to initialize call:", error)
@@ -59,6 +87,14 @@ class WebRTCHandler {
     document.getElementById("adaptiveQuality").addEventListener("change", (e) => {
       this.adaptiveQuality = e.target.checked
     })
+
+    // Camera selection
+    const cameraSelect = document.getElementById("cameraSelect")
+    if (cameraSelect) {
+      cameraSelect.addEventListener("change", (e) => {
+        this.changeCamera(e.target.value)
+      })
+    }
   }
 
   async setupWebSocket() {
@@ -161,6 +197,10 @@ class WebRTCHandler {
       case "screen_share_stop":
         this.showScreenShareNotification(data.username, false)
         break
+
+      case "camera_change":
+        this.showCameraChangeNotification(data.username, data.cameraLabel)
+        break
     }
   }
 
@@ -177,6 +217,11 @@ class WebRTCHandler {
       },
     }
 
+    // Add camera device ID if selected
+    if (this.currentCameraId) {
+      constraints.video.deviceId = { exact: this.currentCameraId }
+    }
+
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints)
       document.getElementById("localVideo").srcObject = this.localStream
@@ -188,6 +233,241 @@ class WebRTCHandler {
     } catch (error) {
       console.error("Error accessing media devices:", error)
       throw error
+    }
+  }
+
+  async enumerateCameras() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      this.availableCameras = devices.filter(device => device.kind === 'videoinput')
+      console.log("📷 Available cameras:", this.availableCameras.map(c => `${c.label || 'Unknown Camera'} (${c.deviceId})`))
+      console.log(`📊 Total cameras found: ${this.availableCameras.length}`)
+      
+      // If we have an active video track, try to match it to a camera
+      if (this.localStream && !this.currentCameraId) {
+        const videoTrack = this.localStream.getVideoTracks()[0]
+        if (videoTrack) {
+          console.log(`🔍 Current video track: ${videoTrack.label}`)
+          // Try to find matching camera by label
+          const matchingCamera = this.availableCameras.find(camera => 
+            camera.label === videoTrack.label || 
+            videoTrack.label.includes(camera.label) ||
+            camera.label.includes(videoTrack.label)
+          )
+          if (matchingCamera) {
+            this.currentCameraId = matchingCamera.deviceId
+            console.log(`✅ Matched current camera: ${matchingCamera.label}`)
+          }
+        }
+      }
+      
+      // Populate camera dropdown
+      this.populateCameraDropdown()
+      
+      // Set default camera (first one if none selected)
+      if (!this.currentCameraId && this.availableCameras.length > 0) {
+        this.currentCameraId = this.availableCameras[0].deviceId
+        console.log(`📷 Set default camera: ${this.availableCameras[0].label || 'Camera 1'}`)
+      }
+    } catch (error) {
+      console.error("Error enumerating cameras:", error)
+    }
+  }
+
+  setupDeviceChangeListener() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.addEventListener) {
+      console.warn("⚠️ Device change monitoring not supported")
+      return
+    }
+
+    // Create the device change handler function
+    this.deviceChangeListener = async () => {
+      console.log("🔌 Device change detected, re-enumerating cameras...")
+      
+      const previousCount = this.availableCameras.length
+      const previousCameras = [...this.availableCameras]
+      
+      // Re-enumerate devices
+      await this.enumerateCameras()
+      
+      const newCount = this.availableCameras.length
+      
+      if (newCount !== previousCount) {
+        console.log(`📷 Camera count changed: ${previousCount} → ${newCount}`)
+        
+        if (newCount > previousCount) {
+          // New camera(s) added
+          const newCameras = this.availableCameras.filter(camera => 
+            !previousCameras.some(prev => prev.deviceId === camera.deviceId)
+          )
+          newCameras.forEach(camera => {
+            console.log(`📷 ➕ New camera detected: ${camera.label || 'Unknown Camera'}`)
+          })
+          
+          // Show notification about new camera
+          this.showDeviceChangeNotification(`New camera available: ${newCameras[0]?.label || 'Unknown Camera'}`, 'success')
+        } else {
+          // Camera(s) removed
+          const removedCameras = previousCameras.filter(prev => 
+            !this.availableCameras.some(camera => camera.deviceId === prev.deviceId)
+          )
+          removedCameras.forEach(camera => {
+            console.log(`📷 ➖ Camera disconnected: ${camera.label || 'Unknown Camera'}`)
+          })
+          
+          // Check if the current camera was removed
+          if (this.currentCameraId && !this.availableCameras.some(c => c.deviceId === this.currentCameraId)) {
+            console.log("⚠️ Current camera was disconnected, switching to first available")
+            if (this.availableCameras.length > 0) {
+              await this.changeCamera(this.availableCameras[0].deviceId)
+              this.showDeviceChangeNotification(`Switched to ${this.availableCameras[0].label || 'Camera 1'} (previous camera disconnected)`, 'warning')
+            } else {
+              this.showDeviceChangeNotification('All cameras disconnected', 'danger')
+            }
+          } else {
+            this.showDeviceChangeNotification(`Camera disconnected: ${removedCameras[0]?.label || 'Unknown Camera'}`, 'warning')
+          }
+        }
+              } else {
+          console.log("📷 Device change detected but camera count unchanged")
+        }
+      }
+
+      // Add the event listener
+      navigator.mediaDevices.addEventListener('devicechange', this.deviceChangeListener)
+      
+      console.log("✅ Device change listener set up successfully")
+    }
+
+  showDeviceChangeNotification(message, type = 'info') {
+    const alertClass = `alert-${type}`
+    const icon = type === 'success' ? 'fa-check-circle' : 
+                 type === 'warning' ? 'fa-exclamation-triangle' : 
+                 type === 'danger' ? 'fa-times-circle' : 'fa-info-circle'
+
+    const notification = document.createElement("div")
+    notification.className = `alert ${alertClass} alert-dismissible fade show`
+    notification.innerHTML = `
+            <i class="fas ${icon}"></i> ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `
+
+    const container = document.querySelector(".container")
+    container.insertBefore(notification, container.firstChild)
+
+    // Auto-remove after 4 seconds
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.remove()
+      }
+    }, 4000)
+  }
+
+  populateCameraDropdown() {
+    const cameraSelect = document.getElementById("cameraSelect")
+    if (!cameraSelect) {
+      console.warn("⚠️ Camera select dropdown not found!")
+      return
+    }
+
+    console.log(`🔄 Populating camera dropdown with ${this.availableCameras.length} cameras`)
+
+    // Clear existing options
+    cameraSelect.innerHTML = ""
+
+    if (this.availableCameras.length === 0) {
+      const option = document.createElement("option")
+      option.value = ""
+      option.textContent = "No cameras available"
+      option.disabled = true
+      cameraSelect.appendChild(option)
+      console.log("❌ No cameras available for dropdown")
+      return
+    }
+
+    // Add camera options
+    this.availableCameras.forEach((camera, index) => {
+      const option = document.createElement("option")
+      option.value = camera.deviceId
+      option.textContent = camera.label || `Camera ${index + 1}`
+      
+      console.log(`📷 Adding camera option: ${option.textContent} (${camera.deviceId})`)
+      
+      // Select current camera
+      if (camera.deviceId === this.currentCameraId) {
+        option.selected = true
+        console.log(`✅ Selected current camera: ${option.textContent}`)
+      }
+      
+      cameraSelect.appendChild(option)
+    })
+    
+    console.log(`✅ Camera dropdown populated with ${this.availableCameras.length} options`)
+  }
+
+  async changeCamera(deviceId) {
+    if (!deviceId || deviceId === this.currentCameraId) return
+
+    try {
+      console.log(`📷 Switching to camera: ${deviceId}`)
+      
+      // Store old video track
+      const oldVideoTrack = this.localStream ? this.localStream.getVideoTracks()[0] : null
+      
+      // Update current camera ID
+      this.currentCameraId = deviceId
+      
+      // Get new video stream with selected camera
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: { exact: deviceId },
+          width: { ideal: this.qualitySettings.video.width },
+          height: { ideal: this.qualitySettings.video.height },
+          frameRate: { ideal: this.qualitySettings.video.frameRate },
+        },
+        audio: false, // Only get video track
+      })
+
+      const newVideoTrack = newStream.getVideoTracks()[0]
+
+      if (this.localStream && oldVideoTrack) {
+        // Replace track in local stream
+        this.localStream.removeTrack(oldVideoTrack)
+        this.localStream.addTrack(newVideoTrack)
+
+        // Replace track in all peer connections
+        this.peerConnections.forEach(async (peerConnection) => {
+          const sender = peerConnection.getSenders().find((s) => s.track && s.track.kind === "video")
+          if (sender) {
+            await sender.replaceTrack(newVideoTrack)
+          }
+        })
+
+        // Stop old video track
+        oldVideoTrack.stop()
+      } else {
+        // If no existing stream, create new one
+        await this.getUserMedia()
+        return
+      }
+
+      console.log(`✅ Camera switched successfully to: ${newVideoTrack.label}`)
+
+      // Notify other participants about camera change
+      this.sendWebSocketMessage({
+        type: "camera_change",
+        cameraLabel: newVideoTrack.label
+      })
+
+    } catch (error) {
+      console.error("Error changing camera:", error)
+      this.showError(`Failed to switch camera: ${error.message}`)
+      
+      // Revert camera selection in dropdown
+      const cameraSelect = document.getElementById("cameraSelect")
+      if (cameraSelect) {
+        cameraSelect.value = this.currentCameraId
+      }
     }
   }
 
@@ -565,6 +845,9 @@ class WebRTCHandler {
         audio: true,
       })
 
+      // Store screen stream for proper cleanup later
+      this.screenStream = screenStream
+
       const videoTrack = screenStream.getVideoTracks()[0]
 
       // Replace video track in all peer connections
@@ -596,10 +879,21 @@ class WebRTCHandler {
   }
 
   async stopScreenShare() {
+    // Stop all screen sharing tracks to properly release screen capture
+    if (this.screenStream) {
+      console.log("🛑 Stopping screen sharing tracks...")
+      this.screenStream.getTracks().forEach(track => {
+        console.log(`🛑 Stopping ${track.kind} track: ${track.label}`)
+        track.stop()
+      })
+      this.screenStream = null
+    }
+
+    // Switch back to camera
     if (this.localStream) {
       const videoTrack = this.localStream.getVideoTracks()[0]
 
-      // Replace screen share with camera
+      // Replace screen share with camera in all peer connections
       this.peerConnections.forEach(async (peerConnection) => {
         const sender = peerConnection.getSenders().find((s) => s.track && s.track.kind === "video")
         if (sender) {
@@ -607,7 +901,7 @@ class WebRTCHandler {
         }
       })
 
-      // Update local video
+      // Update local video back to camera
       document.getElementById("localVideo").srcObject = this.localStream
     }
 
@@ -618,6 +912,8 @@ class WebRTCHandler {
     this.sendWebSocketMessage({
       type: "screen_share_stop",
     })
+
+    console.log("✅ Screen sharing stopped and cleaned up")
   }
 
   toggleMute() {
@@ -631,13 +927,97 @@ class WebRTCHandler {
     }
   }
 
-  toggleVideo() {
+  async toggleVideo() {
+    if (this.isVideoOff) {
+      // Re-enable video: create new video track
+      await this.enableVideo()
+    } else {
+      // Disable video: stop and remove video track
+      await this.disableVideo()
+    }
+  }
+
+  async enableVideo() {
+    try {
+      console.log("📹 Enabling video...")
+      
+      // Get new video stream with current camera
+      const videoConstraints = {
+        width: { ideal: this.qualitySettings.video.width },
+        height: { ideal: this.qualitySettings.video.height },
+        frameRate: { ideal: this.qualitySettings.video.frameRate },
+      }
+
+      // Add camera device ID if selected
+      if (this.currentCameraId) {
+        videoConstraints.deviceId = { exact: this.currentCameraId }
+      }
+
+      const newVideoStream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: false // Only get video track
+      })
+
+      const newVideoTrack = newVideoStream.getVideoTracks()[0]
+
+      if (this.localStream && newVideoTrack) {
+        // Add new video track to local stream
+        this.localStream.addTrack(newVideoTrack)
+
+        // Replace track in all peer connections
+        this.peerConnections.forEach(async (peerConnection) => {
+          const sender = peerConnection.getSenders().find((s) => s.track && s.track.kind === "video")
+          if (sender) {
+            await sender.replaceTrack(newVideoTrack)
+          } else {
+            // Add new sender if none exists
+            peerConnection.addTrack(newVideoTrack, this.localStream)
+          }
+        })
+
+        // Update local video display
+        document.getElementById("localVideo").srcObject = this.localStream
+
+        this.isVideoOff = false
+        this.updateVideoButton()
+        console.log("✅ Video enabled and camera light should turn on")
+      }
+    } catch (error) {
+      console.error("Error enabling video:", error)
+      this.showError("Failed to enable camera. Please check camera permissions.")
+    }
+  }
+
+  async disableVideo() {
+    console.log("📹 Disabling video...")
+    
     if (this.localStream) {
       const videoTrack = this.localStream.getVideoTracks()[0]
       if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled
-        this.isVideoOff = !videoTrack.enabled
+        // Stop the video track to release camera hardware
+        videoTrack.stop()
+        console.log("🛑 Video track stopped - camera light should turn off")
+        
+        // Remove track from local stream
+        this.localStream.removeTrack(videoTrack)
+
+        // Replace track with null in all peer connections (stops transmission)
+        this.peerConnections.forEach(async (peerConnection) => {
+          const sender = peerConnection.getSenders().find((s) => s.track && s.track.kind === "video")
+          if (sender) {
+            await sender.replaceTrack(null)
+          }
+        })
+
+        // Update local video display to show "video off" state
+        const localVideo = document.getElementById("localVideo")
+        if (localVideo) {
+          localVideo.srcObject = this.localStream // Update with stream that no longer has video
+        }
+
+        this.isVideoOff = true
         this.updateVideoButton()
+        console.log("✅ Video disabled and camera released")
       }
     }
   }
@@ -738,6 +1118,20 @@ class WebRTCHandler {
   addParticipant(userId, username) {
     console.log(`👤 Adding participant: ${username} (${userId})`)
     
+    // Check if participant already exists to prevent duplicates
+    const existingParticipant = document.getElementById(`participant-${userId}`)
+    if (existingParticipant) {
+      console.log(`⚠️ Participant ${username} (${userId}) already exists, skipping duplicate add`)
+      return
+    }
+    
+    // Check if video element already exists
+    const existingVideo = document.getElementById(`video-${userId}`)
+    if (existingVideo) {
+      console.log(`⚠️ Video element for ${username} (${userId}) already exists, skipping duplicate add`)
+      return
+    }
+    
     // Add to participants list
     const participantsList = document.getElementById("participantsList")
     const participantDiv = document.createElement("div")
@@ -758,6 +1152,63 @@ class WebRTCHandler {
     console.log(`✅ Participant ${username} added successfully`)
   }
 
+  cleanupOrphanedElements() {
+    // Get all participant elements and video elements
+    const participantElements = document.querySelectorAll('[id^="participant-"]')
+    const videoElements = document.querySelectorAll('[id^="video-"]')
+    
+    // Track which userIds actually have peer connections
+    const activeUserIds = new Set(this.peerConnections.keys())
+    
+    // Remove participant elements that don't have active peer connections
+    participantElements.forEach(element => {
+      const userId = element.id.replace('participant-', '')
+      if (!activeUserIds.has(userId)) {
+        console.log(`🧹 Removing orphaned participant element: ${userId}`)
+        element.remove()
+      }
+    })
+    
+    // Remove video elements that don't have active peer connections
+    videoElements.forEach(element => {
+      const userId = element.id.replace('video-', '')
+      // Skip local video
+      if (userId !== 'localVideo' && !activeUserIds.has(userId)) {
+        console.log(`🧹 Removing orphaned video element: ${userId}`)
+        element.remove()
+      }
+    })
+    
+    // Remove duplicate participant elements (same userId)
+    const seenUserIds = new Set()
+    const allParticipants = document.querySelectorAll('[id^="participant-"]')
+    allParticipants.forEach(element => {
+      const userId = element.id.replace('participant-', '')
+      if (seenUserIds.has(userId)) {
+        console.log(`🧹 Removing duplicate participant element: ${userId}`)
+        element.remove()
+      } else {
+        seenUserIds.add(userId)
+      }
+    })
+    
+    // Remove duplicate video elements (same userId)
+    const seenVideoIds = new Set()
+    const allVideos = document.querySelectorAll('[id^="video-"]')
+    allVideos.forEach(element => {
+      const userId = element.id.replace('video-', '')
+      // Skip local video
+      if (userId !== 'localVideo') {
+        if (seenVideoIds.has(userId)) {
+          console.log(`🧹 Removing duplicate video element: ${userId}`)
+          element.remove()
+        } else {
+          seenVideoIds.add(userId)
+        }
+      }
+    })
+  }
+
   createVideoElement(userId, username) {
     console.log(`🖼️ Creating video element for ${username} (${userId})`)
     
@@ -773,17 +1224,6 @@ class WebRTCHandler {
     videoElement.autoplay = true
     videoElement.playsinline = true
     videoElement.muted = false // Allow audio for remote videos
-    videoElement.style.cssText = `
-      position: absolute;
-      width: 300px;
-      height: 200px;
-      top: 20px;
-      left: ${20 + (Object.keys(this.peerConnections).length * 320)}px;
-      border: 2px solid #007bff;
-      border-radius: 8px;
-      z-index: 5;
-      background: #000;
-    `
     
     // Add participant label
     const label = document.createElement('div')
@@ -791,14 +1231,15 @@ class WebRTCHandler {
     label.textContent = username
     label.style.cssText = `
       position: absolute;
-      bottom: 5px;
-      left: 5px;
+      bottom: 8px;
+      left: 8px;
       background: rgba(0,0,0,0.7);
       color: white;
-      padding: 2px 8px;
+      padding: 4px 10px;
       border-radius: 4px;
-      font-size: 12px;
+      font-size: 14px;
       z-index: 6;
+      font-weight: 500;
     `
     
     // Add loading indicator
@@ -811,13 +1252,16 @@ class WebRTCHandler {
       left: 50%;
       transform: translate(-50%, -50%);
       color: white;
-      font-size: 14px;
+      font-size: 16px;
       z-index: 7;
     `
     
     videoElement.appendChild(label)
     videoElement.appendChild(loadingDiv)
     videoContainer.appendChild(videoElement)
+    
+    // Apply initial positioning
+    this.updateVideoLayout()
     
     // Store pending stream if we have one
     if (this.pendingStreams && this.pendingStreams.has(userId)) {
@@ -827,6 +1271,134 @@ class WebRTCHandler {
     }
     
     console.log(`✅ Video element created for ${username}: #video-${userId}`)
+  }
+
+  updateVideoLayout() {
+    // Clean up any orphaned elements first
+    this.cleanupOrphanedElements()
+    
+    const remoteVideos = document.querySelectorAll('.remote-video')
+    const localVideo = document.getElementById('localVideo')
+    const participantCount = remoteVideos.length
+    
+    console.log(`🔄 Updating video layout for ${participantCount} participants`)
+
+    if (participantCount === 0) {
+      // No remote participants - keep local video in corner
+      if (localVideo) {
+        localVideo.style.cssText = `
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          width: 200px;
+          height: 150px;
+          z-index: 10;
+          border: 2px solid #28a745;
+          border-radius: 8px;
+        `
+      }
+      return
+    }
+
+    if (participantCount === 1) {
+      // One remote participant - make their video full size in center
+      const remoteVideo = remoteVideos[0]
+      remoteVideo.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        border: none;
+        border-radius: 8px;
+        z-index: 2;
+        background: #000;
+        object-fit: cover;
+      `
+
+      // Move local video to top-right corner as picture-in-picture
+      if (localVideo) {
+        localVideo.style.cssText = `
+          position: absolute;
+          top: 20px;
+          right: 20px;
+          width: 180px;
+          height: 135px;
+          z-index: 10;
+          border: 2px solid #28a745;
+          border-radius: 8px;
+          object-fit: cover;
+        `
+      }
+    } else if (participantCount === 2) {
+      // Two remote participants - split screen
+      remoteVideos.forEach((video, index) => {
+        video.style.cssText = `
+          position: absolute;
+          top: 0;
+          left: ${index * 50}%;
+          width: 50%;
+          height: 100%;
+          border: ${index === 0 ? 'none' : '1px solid #333'};
+          border-radius: 0;
+          z-index: 2;
+          background: #000;
+          object-fit: cover;
+        `
+      })
+
+      // Move local video to top-right corner
+      if (localVideo) {
+        localVideo.style.cssText = `
+          position: absolute;
+          top: 20px;
+          right: 20px;
+          width: 150px;
+          height: 113px;
+          z-index: 10;
+          border: 2px solid #28a745;
+          border-radius: 8px;
+          object-fit: cover;
+        `
+      }
+    } else {
+      // Three or more participants - grid layout
+      const cols = Math.ceil(Math.sqrt(participantCount))
+      const rows = Math.ceil(participantCount / cols)
+      
+      remoteVideos.forEach((video, index) => {
+        const row = Math.floor(index / cols)
+        const col = index % cols
+        
+        video.style.cssText = `
+          position: absolute;
+          top: ${(row / rows) * 100}%;
+          left: ${(col / cols) * 100}%;
+          width: ${100 / cols}%;
+          height: ${100 / rows}%;
+          border: 1px solid #333;
+          border-radius: 0;
+          z-index: 2;
+          background: #000;
+          object-fit: cover;
+        `
+      })
+
+      // Move local video to top-left corner
+      if (localVideo) {
+        localVideo.style.cssText = `
+          position: absolute;
+          top: 20px;
+          left: 20px;
+          width: 130px;
+          height: 98px;
+          z-index: 10;
+          border: 2px solid #28a745;
+          border-radius: 8px;
+          object-fit: cover;
+        `
+      }
+    }
   }
 
   attachStreamToVideoElement(userId, stream) {
@@ -896,6 +1468,9 @@ class WebRTCHandler {
       console.log(`🗑️ Cleaning up pending stream for ${userId}`)
       this.pendingStreams.delete(userId)
     }
+    
+    // Update video layout for remaining participants
+    this.updateVideoLayout()
     
     // Update "no participants" message
     this.updateNoParticipantsMessage()
@@ -990,6 +1565,29 @@ class WebRTCHandler {
     }, 5000)
   }
 
+  showCameraChangeNotification(username, cameraLabel) {
+    const message = `${username} switched to ${cameraLabel || 'a different camera'}`
+
+    // Create notification element
+    const notification = document.createElement("div")
+    notification.className = "alert alert-success alert-dismissible fade show"
+    notification.innerHTML = `
+            <i class="fas fa-camera"></i> ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `
+
+    // Add to page
+    const container = document.querySelector(".container")
+    container.insertBefore(notification, container.firstChild)
+
+    // Auto-remove after 3 seconds
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.remove()
+      }
+    }, 3000)
+  }
+
   showError(message) {
     const errorDiv = document.createElement("div")
     errorDiv.className = "alert alert-danger alert-dismissible fade show"
@@ -1021,7 +1619,21 @@ class WebRTCHandler {
   }
 
   endCall() {
-    // Stop all tracks
+    // Remove device change listener
+    if (this.deviceChangeListener && navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+      console.log("🔌 Removing device change listener...")
+      navigator.mediaDevices.removeEventListener('devicechange', this.deviceChangeListener)
+      this.deviceChangeListener = null
+    }
+
+    // Stop screen sharing if active
+    if (this.screenStream) {
+      console.log("🛑 Cleaning up screen sharing before ending call...")
+      this.screenStream.getTracks().forEach((track) => track.stop())
+      this.screenStream = null
+    }
+
+    // Stop all local tracks
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => track.stop())
     }

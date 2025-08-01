@@ -39,7 +39,7 @@
         <div class="quality-panel">
             <h5><i class="fas fa-sliders-h"></i> Quality Controls</h5>
             <div class="row">
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <label for="videoQuality" class="form-label">Video Quality:</label>
                     <select id="videoQuality" class="form-select form-select-sm">
                         <option value="low">Low (360p)</option>
@@ -48,7 +48,13 @@
                         <option value="ultra">Ultra (4K)</option>
                     </select>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
+                    <label for="cameraSelect" class="form-label">Camera:</label>
+                    <select id="cameraSelect" class="form-select form-select-sm">
+                        <option value="">Loading cameras...</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
                     <label class="form-label">Connection Stats:</label>
                     <div>
                         <small>Bandwidth: <span id="bandwidth">0</span> kbps</small><br>
@@ -56,7 +62,7 @@
                         <small>Packet Loss: <span id="packetLoss">0</span>%</small>
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <label class="form-label">Adaptive Quality:</label>
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="adaptiveQuality" 
@@ -132,6 +138,10 @@
     // Initialize WebRTC handler
     const webrtcHandler = new WebRTCHandler(CALL_ID, USER_ID, USERNAME);
     webrtcHandler.initializeCall();
+    
+    // Update button states to reflect initial unmuted/video-on state
+    webrtcHandler.updateMuteButton();
+    webrtcHandler.updateVideoButton();
     
     // Copy call ID function
     function copyCallId() {
