@@ -365,46 +365,18 @@ class WebRTCHandler {
     // 🔧 MOBILE CODEC FIX: Enhanced configuration for mobile compatibility
     const mobileOptimizedConfig = {
       iceServers: [
-        // 🌐 NETWORK FIX: Add more reliable TURN servers for mobile-desktop connectivity
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        // 📱 Add enterprise TURN servers for mobile connectivity
-        { 
-          urls: "turn:openrelay.metered.ca:80",
-          username: "openrelayproject",
-          credential: "openrelayproject"
-        },
-        { 
-          urls: "turn:openrelay.metered.ca:443",
-          username: "openrelayproject", 
-          credential: "openrelayproject"
-        },
-        { 
-          urls: "turn:openrelay.metered.ca:443?transport=tcp",
-          username: "openrelayproject", 
-          credential: "openrelayproject"
-        },
-        // 📱 Mobile-specific TURN servers
-        {
-          urls: "turn:relay.backups.cz",
-          username: "webrtc",
-          credential: "webrtc"
-        },
-        {
-          urls: "turn:relay.backups.cz:3478",
-          username: "webrtc",
-          credential: "webrtc"
-        }
+        { urls: 'stun:stun2.l.google.com:19302' }
       ],
       iceCandidatePoolSize: 10,
       // 📱 Mobile-specific optimizations
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
-      // 🌐 NETWORK FIX: Enhanced ICE transport policy for mobile
-      iceTransportPolicy: 'all'
+      // Add bandwidth constraints for mobile
+      ...(this.isMobile && {
+        iceTransportPolicy: 'all'
+      })
     }
     
     const peerConnection = new RTCPeerConnection(mobileOptimizedConfig)
@@ -1734,37 +1706,11 @@ class WebRTCHandler {
       // Handle ICE candidates
       peerConnection.onicecandidate = (event) => {
           if (event.candidate) {
-              // 🌐 NETWORK FIX: Enhanced ICE candidate filtering for mobile compatibility
-              const candidate = event.candidate
-              
               console.log(`🧊 Sending ICE candidate to ${userId}:`, {
-                  type: candidate.type,
-                  protocol: candidate.protocol,
-                  address: candidate.address || 'hidden',
-                  port: candidate.port,
-                  foundation: candidate.foundation,
-                  priority: candidate.priority
+                  type: event.candidate.type,
+                  protocol: event.candidate.protocol,
+                  address: event.candidate.address || 'hidden'
               })
-              
-              // 📱 MOBILE DEBUG: Enhanced candidate analysis
-              if (this.isMobile) {
-                  console.log(`📱 MOBILE ICE: Candidate details for ${userId}:`, {
-                      type: candidate.type,
-                      protocol: candidate.protocol,
-                      tcpType: candidate.tcpType,
-                      component: candidate.component,
-                      foundation: candidate.foundation,
-                      priority: candidate.priority,
-                      relayProtocol: candidate.relayProtocol
-                  })
-                  
-                  // 📱 Filter candidates for mobile reliability
-                  if (candidate.type === 'host' && this.isMobile) {
-                      console.log(`📱 MOBILE ICE: Preferring host candidate for mobile`)
-                  } else if (candidate.type === 'relay') {
-                      console.log(`📱 MOBILE ICE: Using TURN relay candidate for NAT traversal`)
-                  }
-              }
               
               this.sendWebSocketMessage({
                   type: "ice_candidate",
@@ -1773,14 +1719,6 @@ class WebRTCHandler {
               })
           } else {
               console.log(`🏁 ICE gathering complete for ${userId}`)
-              
-              // 🌐 NETWORK FIX: Force connection check after gathering
-              if (this.isMobile) {
-                  console.log(`📱 MOBILE ICE: Starting connectivity checks for ${userId}`)
-                  setTimeout(() => {
-                      this.checkConnectionState(peerConnection, userId)
-                  }, 2000)
-              }
           }
       }
       
@@ -1921,121 +1859,6 @@ class WebRTCHandler {
           
       } catch (error) {
           console.error(`❌ Error handling video refresh request:`, error)
-      }
-  }
-
-  /**
-   * 🌐 NETWORK FIX: Check and improve connection state for mobile
-   */
-  checkConnectionState(peerConnection, userId) {
-      const connectionState = peerConnection.connectionState
-      const iceConnectionState = peerConnection.iceConnectionState
-      const iceGatheringState = peerConnection.iceGatheringState
-      
-      console.log(`🔍 MOBILE CONNECTION CHECK for ${userId}:`, {
-          connectionState,
-          iceConnectionState,
-          iceGatheringState,
-          signalingState: peerConnection.signalingState
-      })
-      
-      if (this.isMobile) {
-          // 📱 Mobile-specific connection diagnostics
-          if (connectionState === 'connecting' || connectionState === 'new') {
-              console.log(`📱 MOBILE CONNECT: Still connecting to ${userId}, checking stats...`)
-              
-              // Get connection stats for mobile debugging
-              peerConnection.getStats().then(stats => {
-                  let candidatePairs = 0
-                  let activePair = null
-                  
-                  stats.forEach((report) => {
-                      if (report.type === 'candidate-pair') {
-                          candidatePairs++
-                          if (report.state === 'succeeded' || report.selected) {
-                              activePair = report
-                          }
-                      }
-                  })
-                  
-                  console.log(`📱 MOBILE STATS: ${candidatePairs} candidate pairs, active:`, activePair)
-                  
-                  if (candidatePairs === 0) {
-                      console.warn(`⚠️ MOBILE: No candidate pairs found, potential NAT/firewall issue`)
-                  }
-              }).catch(err => {
-                  console.warn(`⚠️ Could not get connection stats:`, err)
-              })
-          }
-          
-          // 📱 Force ICE restart if connection is stuck
-          if (iceConnectionState === 'disconnected' || iceConnectionState === 'failed') {
-              console.log(`🔄 MOBILE: ICE connection ${iceConnectionState}, attempting restart...`)
-              
-              // Try ICE restart
-              peerConnection.restartIce()
-              console.log(`🔄 MOBILE: ICE restart triggered for ${userId}`)
-          }
-      }
-  }
-
-  /**
-   * 🌐 NETWORK FIX: Enhanced connection failure handling for mobile
-   */
-  handleConnectionFailure(userId) {
-      console.log(`🔄 Handling connection failure for ${userId}`)
-      
-      const retryCount = this.connectionRetries.get(userId) || 0
-      const maxRetries = this.isMobile ? 5 : 3 // More retries for mobile
-      
-      if (retryCount < maxRetries) {
-          this.connectionRetries.set(userId, retryCount + 1)
-          
-          // 📱 Mobile-specific retry strategy
-          const retryDelay = this.isMobile ? 3000 + (retryCount * 2000) : 2000 + (retryCount * 1000)
-          
-          console.log(`🔄 Connection retry ${retryCount + 1}/${maxRetries} for ${userId} (waiting ${retryDelay}ms)`)
-          
-          setTimeout(async () => {
-              // 🌐 NETWORK FIX: Enhanced mobile retry logic
-              if (this.isMobile) {
-                  console.log(`📱 MOBILE RETRY: Attempting enhanced reconnection for ${userId}`)
-                  
-                  // Force new TURN server selection on mobile
-                  await this.createPeerConnection(userId)
-                  
-                  // Add delay for mobile network stability
-                  await new Promise(resolve => setTimeout(resolve, 1000))
-              }
-              
-              if (this.shouldInitiateCall(userId)) {
-                  console.log(`🔄 Restarting offer for ${userId}`)
-                  await this.createOffer(userId)
-              } else {
-                  console.log(`⏳ Waiting for offer from ${userId} after retry`)
-              }
-              
-              // Clean up retry counter on successful retry attempt
-              setTimeout(() => {
-                  if (this.peerConnections.has(userId)) {
-                      const pc = this.peerConnections.get(userId)
-                      if (pc.connectionState === 'connected') {
-                          console.log(`🧹 Cleaned up retry counter for ${userId}`)
-                          this.connectionRetries.delete(userId)
-                      }
-                  }
-              }, 5000)
-              
-          }, retryDelay)
-      } else {
-          console.error(`❌ Max retries (${maxRetries}) reached for ${userId}`)
-          this.connectionRetries.delete(userId)
-          
-          // 📱 Mobile-specific final fallback
-          if (this.isMobile) {
-              console.log(`📱 MOBILE FALLBACK: Showing user notification for connection failure`)
-              this.showError(`Unable to connect to ${userId}. Please check your internet connection and try refreshing the page.`)
-          }
       }
   }
 }
