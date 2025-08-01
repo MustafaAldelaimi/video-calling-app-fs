@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+
+{% block title %}Profile{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>User Profile</h2>
+    <div class="card">
+        <div class="card-body">
+            <h5 class="card-title">{{ user.username }}</h5>
+            <p class="card-text">
+                <strong>Email:</strong> {{ user.email|default:"Not provided" }}<br>
+                <strong>Member since:</strong> {{ user.date_joined|date:"F d, Y" }}<br>
+                <strong>Last seen:</strong> {{ user.last_seen|date:"M d, Y H:i" }}<br>
+                <strong>Status:</strong> 
+                {% if user.is_online %}
+                    <span class="badge bg-success">Online</span>
+                {% else %}
+                    <span class="badge bg-secondary">Offline</span>
+                {% endif %}
+            </p>
+            {% if user.avatar %}
+                <img src="{{ user.avatar.url }}" alt="Avatar" class="img-thumbnail" style="max-width: 150px;">
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

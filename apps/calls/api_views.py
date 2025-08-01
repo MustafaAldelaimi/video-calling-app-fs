@@ -11,10 +11,10 @@ def webrtc_js(request):
     """Serve the WebRTC JavaScript file"""
     js_path = os.path.join(settings.BASE_DIR, 'static', 'js', 'webrtc-handler.js')
     try:
-        with open(js_path, 'r') as f:
+        with open(js_path, 'r', encoding='utf-8') as f:
             content = f.read()
         return HttpResponse(content, content_type='application/javascript')
-    except FileNotFoundError:
+    except (FileNotFoundError, UnicodeDecodeError):
         return HttpResponse('// WebRTC handler not found', content_type='application/javascript')
 
 @csrf_exempt
