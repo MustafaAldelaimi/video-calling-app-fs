@@ -15,9 +15,64 @@ main.container {
 video.responsive-local-video {
     position: absolute;
     z-index: 10;
-    border: 2px solid #28a745;
+    border: 2px solid transparent;
     border-radius: 8px;
     object-fit: cover;
+    transition: border-color 0.2s ease;
+    /* Ensure this element creates a containing block for absolutely positioned children */
+    transform: translateZ(0); /* Force stacking context */
+}
+
+/* Ensure all video elements can contain absolutely positioned children */
+.video-element {
+    position: relative;
+}
+
+/* Video wrapper inherits all video positioning styles */
+.video-wrapper.responsive-local-video {
+    position: absolute;
+    z-index: 10;
+    border: 2px solid transparent;
+    border-radius: 8px;
+    transition: border-color 0.2s ease;
+    /* Ensure this element creates a containing block for absolutely positioned children */
+    transform: translateZ(0); /* Force stacking context */
+    overflow: hidden; /* Clip children to video boundaries */
+}
+
+.video-wrapper.responsive-local-video.speaking {
+    border-color: #28a745;
+    box-shadow: 0 0 20px rgba(40, 167, 69, 0.8);
+    border-width: 3px;
+}
+
+.video-wrapper.remote-video {
+    border: 2px solid transparent;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    overflow: hidden; /* Clip children to video boundaries */
+}
+
+.video-wrapper.remote-video.speaking {
+    border-color: #007bff;
+    box-shadow: 0 0 20px rgba(0, 123, 255, 0.8);
+    border-width: 3px;
+}
+
+video.responsive-local-video.speaking {
+    border-color: #28a745;
+    box-shadow: 0 0 20px rgba(40, 167, 69, 0.8);
+    border-width: 3px;
+}
+
+.remote-video {
+    border: 2px solid transparent;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.remote-video.speaking {
+    border-color: #007bff;
+    box-shadow: 0 0 20px rgba(0, 123, 255, 0.8);
+    border-width: 3px;
 }
 
 video.responsive-local-video.local-video-waiting {
@@ -53,6 +108,12 @@ video.responsive-local-video.local-video-grid {
     video.responsive-local-video.local-video-pip { width: min(22vw, 180px); height: min(16vh, 135px); }
     video.responsive-local-video.local-video-split { width: min(20vw, 160px); height: min(15vh, 120px); }
     video.responsive-local-video.local-video-grid { width: min(18vw, 140px); height: min(13vh, 105px); }
+    
+    /* Responsive wrapper styles */
+    .video-wrapper.responsive-local-video.local-video-pip { 
+        width: min(22vw, 180px); 
+        height: min(16vh, 135px); 
+    }
 }
 
 @media (max-width: 480px) {
@@ -60,12 +121,68 @@ video.responsive-local-video.local-video-grid {
     video.responsive-local-video.local-video-pip { width: min(28vw, 140px); height: min(20vh, 105px); }
     video.responsive-local-video.local-video-split { width: min(25vw, 120px); height: min(18vh, 90px); }
     video.responsive-local-video.local-video-grid { width: min(22vw, 100px); height: min(16vh, 75px); }
+    
+    /* Responsive wrapper styles for mobile */
+    .video-wrapper.responsive-local-video.local-video-pip { 
+        width: min(28vw, 140px); 
+        height: min(20vh, 105px); 
+    }
+}
+
+/* Mute indicator styles */
+video .mute-indicator {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: rgba(220, 53, 69, 0.95);
+    color: white;
+    padding: 6px;
+    border-radius: 50%;
+    font-size: 14px;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 2px solid rgba(255, 255, 255, 0.8);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+    user-select: none;
+}
+
+video .mute-indicator:hover {
+    transform: scale(1.1);
+}
+
+.participant-label {
+    pointer-events: none;
+    user-select: none;
+}
+
+/* Ensure mute indicator is visible on small screens */
+@media (max-width: 480px) {
+    video .mute-indicator {
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+        bottom: 6px;
+        left: 6px;
+    }
+    
+    .participant-label {
+        font-size: 12px;
+        padding: 3px 8px;
+        bottom: 6px;
+        right: 6px;
+    }
 }
 </style>
 <div class="row">
     <!-- Main Video Area -->
     <div class="col-12">
-        <div class="video-container" style="height: 70vh; min-height: 600px; background: #1a1a1a; border-radius: 8px; position: relative;">
+        <div class="video-container" style="height: calc(70vh - 80px); min-height: 520px; background: #1a1a1a; border-radius: 8px; position: relative;">
             <!-- Dynamic video elements will be created here -->
             <video id="localVideo" class="video-element responsive-local-video local-video-waiting" autoplay playsinline muted></video>
             
@@ -75,21 +192,22 @@ video.responsive-local-video.local-video-grid {
                 <h4>Waiting for participants...</h4>
                 <p>Share the call ID with others to join</p>
             </div>
-            
-            <div class="video-controls">
-                <button id="muteBtn" class="control-btn mute" title="Mute/Unmute">
-                    <i class="fas fa-microphone"></i>
-                </button>
-                <button id="videoBtn" class="control-btn video" title="Camera On/Off">
-                    <i class="fas fa-video"></i>
-                </button>
-                <button id="screenShareBtn" class="control-btn screen" title="Share Screen">
-                    <i class="fas fa-desktop"></i>
-                </button>
-                <button id="endCallBtn" class="control-btn end" title="End Call">
-                    <i class="fas fa-phone-slash"></i>
-                </button>
-            </div>
+        </div>
+        
+        <!-- Video controls positioned below the video -->
+        <div class="video-controls" style="position: relative; bottom: auto; left: auto; transform: none; justify-content: center; margin-top: 20px;">
+            <button id="muteBtn" class="control-btn mute" title="Mute/Unmute">
+                <i class="fas fa-microphone"></i>
+            </button>
+            <button id="videoBtn" class="control-btn video" title="Camera On/Off">
+                <i class="fas fa-video"></i>
+            </button>
+            <button id="screenShareBtn" class="control-btn screen" title="Share Screen">
+                <i class="fas fa-desktop"></i>
+            </button>
+            <button id="endCallBtn" class="control-btn end" title="End Call">
+                <i class="fas fa-phone-slash"></i>
+            </button>
         </div>
         
         <!-- Quality Control Panel -->
@@ -194,11 +312,21 @@ video.responsive-local-video.local-video-grid {
 <script>
     // Initialize WebRTC handler
     const webrtcHandler = new WebRTCHandler(CALL_ID, USER_ID, USERNAME);
+    
+    // Make it globally accessible for debugging
+    window.webrtcHandler = webrtcHandler;
+    
     webrtcHandler.initializeCall();
     
     // Update button states to reflect initial unmuted/video-on state
     webrtcHandler.updateMuteButton();
     webrtcHandler.updateVideoButton();
+    
+    // Set up initial mute indicator after a short delay to ensure video element is ready
+    setTimeout(() => {
+        console.log("🔇 Setting up initial mute indicator state");
+        webrtcHandler.updateMuteIndicator('localVideo', webrtcHandler.isMuted);
+    }, 1000);
     
     // Copy call ID function
     function copyCallId() {

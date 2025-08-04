@@ -16,6 +16,13 @@ class WebRTCHandler {
     this.availableCameras = []
     this.screenStream = null
     this.deviceChangeListener = null
+    
+    // Audio monitoring
+    this.audioContext = null
+    this.localAnalyser = null
+    this.remoteAnalysers = new Map()
+    this.audioMonitoringInterval = null
+    this.speakingThreshold = 0.01 // Lowered threshold for better voice detection
 
     // Quality settings
     this.qualitySettings = {
@@ -94,6 +101,21 @@ class WebRTCHandler {
       cameraSelect.addEventListener("change", (e) => {
         this.changeCamera(e.target.value)
       })
+    }
+
+    // Add global click listener to resume AudioContext on user interaction
+    document.addEventListener('click', () => this.resumeAudioContextIfNeeded(), { once: true })
+    document.addEventListener('keydown', () => this.resumeAudioContextIfNeeded(), { once: true })
+  }
+
+  async resumeAudioContextIfNeeded() {
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      try {
+        await this.audioContext.resume()
+        console.log("🎵 AudioContext resumed due to user interaction")
+      } catch (error) {
+        console.error("❌ Failed to resume AudioContext:", error)
+      }
     }
   }
 
@@ -201,6 +223,12 @@ class WebRTCHandler {
       case "camera_change":
         this.showCameraChangeNotification(data.username, data.cameraLabel)
         break
+
+      case "mute_status":
+        if (data.sender_id !== this.userId) {
+          this.updateMuteIndicator(`video-${data.sender_id}`, data.is_muted)
+        }
+        break
     }
   }
 
@@ -227,6 +255,12 @@ class WebRTCHandler {
       document.getElementById("localVideo").srcObject = this.localStream
       console.log("📹 Local stream obtained:", this.localStream)
       console.log("🎬 Local tracks:", this.localStream.getTracks().map(t => `${t.kind}: ${t.label}`))
+      
+      // Set up local video label and initial mute state
+      this.setupLocalVideoElements()
+      
+      // Set up audio monitoring for local stream
+      await this.setupLocalAudioMonitoring()
       
       // Add local stream to any existing peer connections
       this.addLocalStreamToExistingPeers()
@@ -370,8 +404,6 @@ class WebRTCHandler {
       return
     }
 
-    console.log(`🔄 Populating camera dropdown with ${this.availableCameras.length} cameras`)
-
     // Clear existing options
     cameraSelect.innerHTML = ""
 
@@ -381,7 +413,6 @@ class WebRTCHandler {
       option.textContent = "No cameras available"
       option.disabled = true
       cameraSelect.appendChild(option)
-      console.log("❌ No cameras available for dropdown")
       return
     }
 
@@ -391,18 +422,13 @@ class WebRTCHandler {
       option.value = camera.deviceId
       option.textContent = camera.label || `Camera ${index + 1}`
       
-      console.log(`📷 Adding camera option: ${option.textContent} (${camera.deviceId})`)
-      
       // Select current camera
       if (camera.deviceId === this.currentCameraId) {
         option.selected = true
-        console.log(`✅ Selected current camera: ${option.textContent}`)
       }
       
       cameraSelect.appendChild(option)
     })
-    
-    console.log(`✅ Camera dropdown populated with ${this.availableCameras.length} options`)
   }
 
   async changeCamera(deviceId) {
@@ -469,6 +495,71 @@ class WebRTCHandler {
         cameraSelect.value = this.currentCameraId
       }
     }
+  }
+
+  setupLocalVideoElements() {
+    const localVideo = document.getElementById("localVideo")
+    if (!localVideo) return
+
+    // Create a wrapper around the video to properly contain absolutely positioned children
+    if (!localVideo.parentElement.classList.contains('video-wrapper')) {
+      const wrapper = document.createElement('div')
+      wrapper.className = 'video-wrapper'
+      wrapper.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        pointer-events: none;
+      `
+      
+      // Copy the video's positioning classes to the wrapper
+      wrapper.classList.add(...localVideo.classList)
+      
+      // Remove positioning classes from video and make it fill the wrapper
+      localVideo.className = 'video-element'
+      localVideo.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: auto;
+      `
+      
+      // Insert wrapper and move video into it
+      localVideo.parentNode.insertBefore(wrapper, localVideo)
+      wrapper.appendChild(localVideo)
+    }
+
+    const wrapper = localVideo.parentElement
+
+    // Add participant label to the wrapper (not the video)
+    const existingLabel = wrapper.querySelector('.participant-label')
+    if (!existingLabel) {
+      const label = document.createElement('div')
+      label.className = 'participant-label'
+      label.textContent = 'You'
+      label.style.cssText = `
+        position: absolute;
+        bottom: 8px;
+        right: 8px;
+        background: rgba(0,0,0,0.7);
+        color: white;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 14px;
+        z-index: 1000;
+        font-weight: 500;
+        pointer-events: none;
+      `
+      wrapper.appendChild(label)
+    }
+
+    // Set initial mute indicator state (should be unmuted initially)
+    this.updateMuteIndicator('localVideo', this.isMuted)
   }
 
   addLocalStreamToExistingPeers() {
@@ -923,6 +1014,22 @@ class WebRTCHandler {
         audioTrack.enabled = !audioTrack.enabled
         this.isMuted = !audioTrack.enabled
         this.updateMuteButton()
+        this.updateMuteIndicator('localVideo', this.isMuted)
+        
+        // Remove speaking indicator when muted
+        if (this.isMuted) {
+          this.updateVideoHighlight('localVideo', false)
+        }
+
+        // Notify other participants about mute status change (if WebSocket is connected)
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+          this.sendWebSocketMessage({
+            type: "mute_status",
+            is_muted: this.isMuted
+          })
+        } else {
+          console.log("🔇 Mute status updated locally (WebSocket not connected)")
+        }
       }
     }
   }
@@ -1228,47 +1335,57 @@ class WebRTCHandler {
       return
     }
     
+    // Create wrapper for proper positioning context
+    const wrapper = document.createElement('div')
+    wrapper.className = 'video-wrapper video-element remote-video'
+    wrapper.id = `wrapper-${userId}`
+    wrapper.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      pointer-events: none;
+    `
+    
     const videoElement = document.createElement('video')
     videoElement.id = `video-${userId}`
-    videoElement.className = 'video-element remote-video'
+    videoElement.className = 'video-element'
     videoElement.autoplay = true
     videoElement.playsinline = true
     videoElement.muted = false // Allow audio for remote videos
+    videoElement.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: auto;
+      object-fit: cover;
+    `
     
-    // Add participant label
+    // Add participant label to wrapper
     const label = document.createElement('div')
     label.className = 'participant-label'
     label.textContent = username
     label.style.cssText = `
       position: absolute;
       bottom: 8px;
-      left: 8px;
+      right: 8px;
       background: rgba(0,0,0,0.7);
       color: white;
       padding: 4px 10px;
       border-radius: 4px;
       font-size: 14px;
-      z-index: 6;
+      z-index: 1000;
       font-weight: 500;
+      pointer-events: none;
     `
     
-    // Add loading indicator
-    const loadingDiv = document.createElement('div')
-    loadingDiv.className = 'video-loading'
-    loadingDiv.textContent = 'Connecting...'
-    loadingDiv.style.cssText = `
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      color: white;
-      font-size: 16px;
-      z-index: 7;
-    `
-    
-    videoElement.appendChild(label)
-    videoElement.appendChild(loadingDiv)
-    videoContainer.appendChild(videoElement)
+    wrapper.appendChild(videoElement)
+    wrapper.appendChild(label)
+    videoContainer.appendChild(wrapper)
     
     // Apply initial positioning
     this.updateVideoLayout()
@@ -1287,87 +1404,136 @@ class WebRTCHandler {
     // Clean up any orphaned elements first
     this.cleanupOrphanedElements()
     
-    const remoteVideos = document.querySelectorAll('.remote-video')
+    // Get remote video wrappers (or videos if no wrapper)
+    const remoteVideoWrappers = document.querySelectorAll('.video-wrapper.remote-video, .remote-video:not(.video-wrapper .remote-video)')
     const localVideo = document.getElementById('localVideo')
-    const participantCount = remoteVideos.length
+    const localWrapper = localVideo?.parentElement?.classList.contains('video-wrapper') ? localVideo.parentElement : localVideo
+    const participantCount = remoteVideoWrappers.length
+    const noParticipantsMessage = document.getElementById("noParticipantsMessage")
     
     console.log(`🔄 Updating video layout for ${participantCount} participants`)
 
+    // Reset video container to normal positioning for non-grid layouts
+    const videoContainer = document.querySelector('.video-container')
+    if (videoContainer && participantCount <= 1) {
+      videoContainer.style.display = 'block'
+      videoContainer.style.flexWrap = ''
+      videoContainer.style.gap = ''
+    }
+
     if (participantCount === 0) {
-      // No remote participants - keep local video in corner
-      if (localVideo) {
-        localVideo.className = 'video-element responsive-local-video local-video-waiting'
+      // No remote participants - local video fills full container
+      if (localVideo && localWrapper) {
+        localWrapper.style.cssText = `
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          z-index: 10;
+          border: 2px solid transparent;
+          border-radius: 8px;
+          overflow: hidden;
+          pointer-events: none;
+        `
+        localWrapper.className = 'video-wrapper video-element responsive-local-video local-video-waiting'
+      }
+      
+      // Show waiting message if no local video either
+      if (noParticipantsMessage) {
+        noParticipantsMessage.style.display = localVideo ? 'none' : 'block'
       }
       return
     }
 
+    // Hide waiting message when we have participants
+    if (noParticipantsMessage) {
+      noParticipantsMessage.style.display = 'none'
+    }
+
     if (participantCount === 1) {
-      // One remote participant - make their video full size in center
-      const remoteVideo = remoteVideos[0]
-      remoteVideo.style.cssText = `
+      // One remote participant - remote video fills container, local video in top-right corner
+      const remoteWrapper = remoteVideoWrappers[0]
+      remoteWrapper.style.cssText = `
         position: absolute;
         top: 0;
         left: 0;
         width: 100%;
         height: 100%;
-        border: none;
+        border: 2px solid transparent;
         border-radius: 8px;
         z-index: 2;
         background: #000;
-        object-fit: cover;
+        overflow: hidden;
+        pointer-events: none;
       `
 
       // Move local video to top-right corner as picture-in-picture
-      if (localVideo) {
-        localVideo.className = 'video-element responsive-local-video local-video-pip'
-      }
-    } else if (participantCount === 2) {
-      // Two remote participants - split screen
-      remoteVideos.forEach((video, index) => {
-        video.style.cssText = `
+      if (localVideo && localWrapper) {
+        localWrapper.style.cssText = `
           position: absolute;
-          top: 0;
-          left: ${index * 50}%;
-          width: 50%;
-          height: 100%;
-          border: ${index === 0 ? 'none' : '1px solid #333'};
-          border-radius: 0;
-          z-index: 2;
-          background: #000;
-          object-fit: cover;
+          top: 2vh;
+          right: 2vw;
+          width: min(18vw, 250px);
+          height: min(13.5vh, 188px);
+          z-index: 10;
+          border: 2px solid transparent;
+          border-radius: 8px;
+          overflow: hidden;
+          pointer-events: none;
         `
-      })
-
-      // Move local video to top-right corner
-      if (localVideo) {
-        localVideo.className = 'video-element responsive-local-video local-video-split'
+        localWrapper.className = 'video-wrapper video-element responsive-local-video local-video-pip'
       }
     } else {
-      // Three or more participants - grid layout
-      const cols = Math.ceil(Math.sqrt(participantCount))
-      const rows = Math.ceil(participantCount / cols)
+      // Multiple participants (2+) - grid layout using flexbox approach
+      const videoContainer = document.querySelector('.video-container')
+      if (videoContainer) {
+        // Convert container to flex for grid layout
+        videoContainer.style.cssText += `
+          display: flex;
+          flex-wrap: wrap;
+          gap: 2px;
+        `
+      }
       
-      remoteVideos.forEach((video, index) => {
-        const row = Math.floor(index / cols)
-        const col = index % cols
-        
-        video.style.cssText = `
-          position: absolute;
-          top: ${(row / rows) * 100}%;
-          left: ${(col / cols) * 100}%;
-          width: ${100 / cols}%;
-          height: ${100 / rows}%;
+      // Include local video in grid calculation
+      const totalVideos = participantCount + (localVideo ? 1 : 0)
+      const cols = Math.ceil(Math.sqrt(totalVideos))
+      const rows = Math.ceil(totalVideos / cols)
+      
+      // Calculate dimensions for flex grid
+      const itemWidth = `calc(${100 / cols}% - ${(cols - 1) * 2}px / ${cols})`
+      const itemHeight = `calc(${100 / rows}% - ${(rows - 1) * 2}px / ${rows})`
+      
+      // Style all remote videos
+      remoteVideoWrappers.forEach((wrapper, index) => {
+        wrapper.style.cssText = `
+          position: relative;
+          width: ${itemWidth};
+          height: ${itemHeight};
           border: 1px solid #333;
-          border-radius: 0;
-          z-index: 2;
+          border-radius: 4px;
           background: #000;
-          object-fit: cover;
+          overflow: hidden;
+          pointer-events: none;
+          flex-shrink: 0;
         `
       })
 
-      // Move local video to top-left corner
-      if (localVideo) {
-        localVideo.className = 'video-element responsive-local-video local-video-grid'
+      // Style local video to fit in grid
+      if (localVideo && localWrapper) {
+        localWrapper.style.cssText = `
+          position: relative;
+          width: ${itemWidth};
+          height: ${itemHeight};
+          border: 2px solid transparent;
+          border-radius: 4px;
+          overflow: hidden;
+          pointer-events: none;
+          flex-shrink: 0;
+          order: -1;
+        `
+        localWrapper.className = 'video-wrapper video-element responsive-local-video local-video-grid'
       }
     }
   }
@@ -1388,14 +1554,11 @@ class WebRTCHandler {
     }
 
     try {
-      // Remove loading indicator
-      const loadingDiv = videoElement.querySelector('.video-loading')
-      if (loadingDiv) {
-        loadingDiv.remove()
-      }
-
       videoElement.srcObject = stream
       console.log(`✅ Remote stream attached to video element for user ${userId}`)
+      
+      // Set up audio monitoring for remote stream
+      this.setupRemoteAudioMonitoring(userId, stream)
       
       // Add event listeners for debugging
       videoElement.onloadedmetadata = () => {
@@ -1434,6 +1597,9 @@ class WebRTCHandler {
       videoElement.remove()
     }
     
+    // Remove audio monitoring for this participant
+    this.removeParticipantAudioMonitoring(userId)
+    
     // Clean up pending streams
     if (this.pendingStreams && this.pendingStreams.has(userId)) {
       console.log(`🗑️ Cleaning up pending stream for ${userId}`)
@@ -1453,12 +1619,9 @@ class WebRTCHandler {
   }
 
   updateNoParticipantsMessage() {
-    const noParticipantsMessage = document.getElementById("noParticipantsMessage")
-    const hasParticipants = this.peerConnections.size > 0
-    
-    if (noParticipantsMessage) {
-      noParticipantsMessage.style.display = hasParticipants ? 'none' : 'block'
-    }
+    // This logic is now handled in updateVideoLayout()
+    // Keeping this function for compatibility but delegating to layout update
+    this.updateVideoLayout()
   }
 
   closePeerConnection(userId) {
@@ -1585,10 +1748,15 @@ class WebRTCHandler {
       })
       this.websocket.send(JSON.stringify(message))
     } else {
-      console.error(`❌ Cannot send WebSocket message - connection not open:`, {
-        readyState: this.websocket?.readyState,
-        messageType: message.type
-      })
+      // For mute_status messages, don't show error since it's normal when alone
+      if (message.type === 'mute_status') {
+        console.log(`🔇 Mute status not sent - no other participants connected`)
+      } else {
+        console.warn(`⚠️ Cannot send WebSocket message - connection not open:`, {
+          readyState: this.websocket?.readyState,
+          messageType: message.type
+        })
+      }
     }
   }
 
@@ -1625,5 +1793,342 @@ class WebRTCHandler {
 
     // Redirect to dashboard
     window.location.href = "/"
+  }
+
+  async setupLocalAudioMonitoring() {
+    try {
+      if (!this.localStream) return
+
+      const audioTrack = this.localStream.getAudioTracks()[0]
+      if (!audioTrack) return
+
+      // Create audio context if it doesn't exist
+      if (!this.audioContext) {
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)()
+      }
+
+      // Resume audio context if suspended (required by browser autoplay policies)
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume()
+        console.log("🎵 AudioContext resumed")
+      }
+
+      // Create analyser for local audio with better settings for voice detection
+      this.localAnalyser = this.audioContext.createAnalyser()
+      this.localAnalyser.fftSize = 512 // Increased for better frequency resolution
+      this.localAnalyser.smoothingTimeConstant = 0.8
+      this.localAnalyser.minDecibels = -90
+      this.localAnalyser.maxDecibels = -10
+
+      // Create media stream source
+      const source = this.audioContext.createMediaStreamSource(this.localStream)
+      source.connect(this.localAnalyser)
+
+      // Start monitoring if not already running
+      if (!this.audioMonitoringInterval) {
+        this.startAudioMonitoring()
+      }
+
+      console.log("🎤 Local audio monitoring setup complete")
+    } catch (error) {
+      console.error("❌ Error setting up local audio monitoring:", error)
+    }
+  }
+
+  async setupRemoteAudioMonitoring(userId, stream) {
+    try {
+      const audioTrack = stream.getAudioTracks()[0]
+      if (!audioTrack) return
+
+      // Create audio context if it doesn't exist
+      if (!this.audioContext) {
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)()
+      }
+
+      // Resume audio context if suspended
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume()
+      }
+
+      // Create analyser for this remote user with better settings
+      const analyser = this.audioContext.createAnalyser()
+      analyser.fftSize = 512 // Increased for better frequency resolution
+      analyser.smoothingTimeConstant = 0.8
+      analyser.minDecibels = -90
+      analyser.maxDecibels = -10
+
+      // Create media stream source
+      const source = this.audioContext.createMediaStreamSource(stream)
+      source.connect(analyser)
+
+      // Store analyser for this user
+      this.remoteAnalysers.set(userId, analyser)
+
+      // Start monitoring if not already running
+      if (!this.audioMonitoringInterval) {
+        this.startAudioMonitoring()
+      }
+
+      console.log(`🎤 Remote audio monitoring setup for user ${userId}`)
+    } catch (error) {
+      console.error(`❌ Error setting up remote audio monitoring for ${userId}:`, error)
+    }
+  }
+
+  startAudioMonitoring() {
+    if (this.audioMonitoringInterval) return
+
+    this.audioMonitoringInterval = setInterval(() => {
+      this.checkAudioLevels()
+    }, 100) // Check every 100ms
+
+    console.log("🎵 Audio monitoring started")
+  }
+
+  stopAudioMonitoring() {
+    if (this.audioMonitoringInterval) {
+      clearInterval(this.audioMonitoringInterval)
+      this.audioMonitoringInterval = null
+    }
+
+    // Cleanup audio context
+    if (this.audioContext) {
+      this.audioContext.close()
+      this.audioContext = null
+    }
+
+    this.localAnalyser = null
+    this.remoteAnalysers.clear()
+
+    console.log("🔇 Audio monitoring stopped")
+  }
+
+  checkAudioLevels() {
+    // Check local audio level
+    if (this.localAnalyser && !this.isMuted) {
+      const audioLevel = this.getAudioLevel(this.localAnalyser)
+      const isSpeaking = audioLevel > this.speakingThreshold
+      this.updateVideoHighlight('localVideo', isSpeaking)
+    }
+
+    // Check remote audio levels
+    this.remoteAnalysers.forEach((analyser, userId) => {
+      const audioLevel = this.getAudioLevel(analyser)
+      const isSpeaking = audioLevel > this.speakingThreshold
+      this.updateVideoHighlight(`video-${userId}`, isSpeaking)
+    })
+  }
+
+  getAudioLevel(analyser) {
+    const bufferLength = analyser.fftSize
+    const dataArray = new Uint8Array(bufferLength)
+    analyser.getByteTimeDomainData(dataArray)
+
+    // Calculate RMS (Root Mean Square) for better voice detection
+    let rms = 0
+    for (let i = 0; i < bufferLength; i++) {
+      const sample = (dataArray[i] - 128) / 128 // Convert to -1 to 1 range
+      rms += sample * sample
+    }
+    rms = Math.sqrt(rms / bufferLength)
+    
+    return rms
+  }
+
+  updateVideoHighlight(elementId, isSpeaking) {
+    const videoElement = document.getElementById(elementId)
+    if (!videoElement) return
+
+    // Check if video is wrapped, and apply speaking class to wrapper instead
+    const targetElement = videoElement.parentElement && videoElement.parentElement.classList.contains('video-wrapper') 
+      ? videoElement.parentElement 
+      : videoElement
+
+    if (isSpeaking) {
+      targetElement.classList.add('speaking')
+    } else {
+      targetElement.classList.remove('speaking')
+    }
+  }
+
+  updateMuteIndicator(elementId, isMuted) {
+    console.log(`🔇 updateMuteIndicator called for ${elementId}, muted: ${isMuted}`)
+    
+    const videoElement = document.getElementById(elementId)
+    if (!videoElement) {
+      console.warn(`❌ Video element not found: ${elementId}`)
+      return
+    }
+
+    // Find the wrapper element (for all videos with wrappers) or use the video element directly
+    let targetElement = videoElement
+    if (videoElement.parentElement && videoElement.parentElement.classList.contains('video-wrapper')) {
+      targetElement = videoElement.parentElement
+    }
+
+    // Remove existing mute indicator if it exists
+    const existingIndicator = targetElement.querySelector('.mute-indicator')
+    if (existingIndicator) {
+      console.log(`🗑️ Removing existing mute indicator for ${elementId}`)
+      existingIndicator.remove()
+    }
+
+    // Add mute indicator if muted
+    if (isMuted) {
+      console.log(`➕ Adding mute indicator for ${elementId}`)
+      
+      const muteIndicator = document.createElement('div')
+      muteIndicator.className = 'mute-indicator'
+      muteIndicator.innerHTML = '<i class="fas fa-microphone-slash"></i>'
+      muteIndicator.style.cssText = `
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+        background: rgba(220, 53, 69, 0.95);
+        color: white;
+        padding: 6px;
+        border-radius: 50%;
+        font-size: 14px;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: 2px solid rgba(255, 255, 255, 0.8);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        pointer-events: none;
+        user-select: none;
+      `
+      
+      targetElement.appendChild(muteIndicator)
+      
+      console.log(`✅ Mute indicator added for ${elementId} to ${targetElement.className}`)
+    } else {
+      console.log(`🔊 No mute indicator needed for ${elementId} (not muted)`)
+    }
+  }
+
+  // Debug function - can be called from browser console
+  debugAudioMonitoring() {
+    console.log("🔍 Audio Monitoring Debug Info:")
+    console.log("- Local stream:", !!this.localStream)
+    console.log("- Audio context:", !!this.audioContext)
+    console.log("- Audio context state:", this.audioContext?.state)
+    console.log("- Local analyser:", !!this.localAnalyser)
+    console.log("- Monitoring interval:", !!this.audioMonitoringInterval)
+    console.log("- Is muted:", this.isMuted)
+    console.log("- Speaking threshold:", this.speakingThreshold)
+    console.log("- Remote analysers count:", this.remoteAnalysers.size)
+    
+    if (this.localStream) {
+      const audioTracks = this.localStream.getAudioTracks()
+      console.log("- Audio tracks:", audioTracks.length)
+      audioTracks.forEach((track, i) => {
+        console.log(`  Track ${i}:`, {
+          label: track.label,
+          enabled: track.enabled,
+          readyState: track.readyState
+        })
+      })
+    }
+    
+    // Test current audio level
+    if (this.localAnalyser) {
+      const currentLevel = this.getAudioLevel(this.localAnalyser)
+      console.log("- Current audio level:", currentLevel)
+      console.log("- Would be speaking:", currentLevel > this.speakingThreshold)
+    }
+  }
+
+  // Debug function for testing mute indicators
+  debugMuteIndicator() {
+    console.log("🔍 Mute Indicator Debug Info:")
+    console.log("- Current mute state:", this.isMuted)
+    
+    const localVideo = document.getElementById('localVideo')
+    console.log("- Local video element found:", !!localVideo)
+    
+    if (localVideo) {
+      const wrapper = localVideo.parentElement
+      console.log("- Video wrapper found:", wrapper.classList.contains('video-wrapper'))
+      console.log("- Wrapper position:", window.getComputedStyle(wrapper).position)
+      
+      const targetElement = wrapper.classList.contains('video-wrapper') ? wrapper : localVideo
+      const muteIndicator = targetElement.querySelector('.mute-indicator')
+      console.log("- Existing mute indicator:", !!muteIndicator)
+      console.log("- Target element for indicator:", targetElement.className)
+      
+      if (muteIndicator) {
+        console.log("- Mute indicator styles:", muteIndicator.style.cssText)
+        console.log("- Mute indicator visible:", muteIndicator.offsetWidth > 0 && muteIndicator.offsetHeight > 0)
+        const rect = muteIndicator.getBoundingClientRect()
+        console.log("- Mute indicator position:", { x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+      }
+    }
+    
+    // Test adding a mute indicator
+    console.log("🧪 Testing mute indicator...")
+    this.updateMuteIndicator('localVideo', true)
+    
+    setTimeout(() => {
+      console.log("🧪 Testing mute indicator removal...")
+      this.updateMuteIndicator('localVideo', false)
+    }, 3000)
+  }
+
+  // Debug function for positioning issues
+  debugVideoPosition() {
+    const localVideo = document.getElementById('localVideo')
+    if (!localVideo) {
+      console.log("❌ Local video element not found")
+      return
+    }
+
+    const computedStyle = window.getComputedStyle(localVideo)
+    const boundingRect = localVideo.getBoundingClientRect()
+
+    console.log("🎥 Video Element Position Debug:")
+    console.log("- Position:", computedStyle.position)
+    console.log("- Top:", computedStyle.top)
+    console.log("- Left:", computedStyle.left)
+    console.log("- Right:", computedStyle.right)
+    console.log("- Bottom:", computedStyle.bottom)
+    console.log("- Width:", computedStyle.width)
+    console.log("- Height:", computedStyle.height)
+    console.log("- Transform:", computedStyle.transform)
+    console.log("- Bounding Rect:", {
+      x: boundingRect.x,
+      y: boundingRect.y,
+      width: boundingRect.width,
+      height: boundingRect.height
+    })
+
+    const muteIndicator = localVideo.querySelector('.mute-indicator')
+    if (muteIndicator) {
+      const indicatorRect = muteIndicator.getBoundingClientRect()
+      console.log("- Mute Indicator Rect:", {
+        x: indicatorRect.x,
+        y: indicatorRect.y,
+        width: indicatorRect.width,
+        height: indicatorRect.height
+      })
+    }
+  }
+
+  removeParticipantAudioMonitoring(userId) {
+    // Remove analyser for this user
+    if (this.remoteAnalysers.has(userId)) {
+      this.remoteAnalysers.delete(userId)
+      console.log(`🔇 Removed audio monitoring for user ${userId}`)
+    }
+
+    // Remove highlight
+    this.updateVideoHighlight(`video-${userId}`, false)
+
+    // Stop monitoring if no more participants
+    if (this.remoteAnalysers.size === 0 && !this.localAnalyser) {
+      this.stopAudioMonitoring()
+    }
   }
 }
