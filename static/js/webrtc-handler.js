@@ -1296,16 +1296,7 @@ class WebRTCHandler {
     if (participantCount === 0) {
       // No remote participants - keep local video in corner
       if (localVideo) {
-        localVideo.style.cssText = `
-          position: absolute;
-          top: 10px;
-          right: 10px;
-          width: 200px;
-          height: 150px;
-          z-index: 10;
-          border: 2px solid #28a745;
-          border-radius: 8px;
-        `
+        localVideo.className = 'video-element responsive-local-video local-video-waiting'
       }
       return
     }
@@ -1328,17 +1319,7 @@ class WebRTCHandler {
 
       // Move local video to top-right corner as picture-in-picture
       if (localVideo) {
-        localVideo.style.cssText = `
-          position: absolute;
-          top: 20px;
-          right: 20px;
-          width: 180px;
-          height: 135px;
-          z-index: 10;
-          border: 2px solid #28a745;
-          border-radius: 8px;
-          object-fit: cover;
-        `
+        localVideo.className = 'video-element responsive-local-video local-video-pip'
       }
     } else if (participantCount === 2) {
       // Two remote participants - split screen
@@ -1359,17 +1340,7 @@ class WebRTCHandler {
 
       // Move local video to top-right corner
       if (localVideo) {
-        localVideo.style.cssText = `
-          position: absolute;
-          top: 20px;
-          right: 20px;
-          width: 150px;
-          height: 113px;
-          z-index: 10;
-          border: 2px solid #28a745;
-          border-radius: 8px;
-          object-fit: cover;
-        `
+        localVideo.className = 'video-element responsive-local-video local-video-split'
       }
     } else {
       // Three or more participants - grid layout
@@ -1396,17 +1367,7 @@ class WebRTCHandler {
 
       // Move local video to top-left corner
       if (localVideo) {
-        localVideo.style.cssText = `
-          position: absolute;
-          top: 20px;
-          left: 20px;
-          width: 130px;
-          height: 98px;
-          z-index: 10;
-          border: 2px solid #28a745;
-          border-radius: 8px;
-          object-fit: cover;
-        `
+        localVideo.className = 'video-element responsive-local-video local-video-grid'
       }
     }
   }

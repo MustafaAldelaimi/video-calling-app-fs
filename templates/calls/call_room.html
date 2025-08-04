@@ -4,13 +4,70 @@
 {% block title %}Call Room - Video Calling App{% endblock %}
 
 {% block content %}
+<style>
+main.container {
+    max-width: 90vw;
+    padding-left: 0;
+    padding-right: 0;
+    width: 100%;
+}
+
+video.responsive-local-video {
+    position: absolute;
+    z-index: 10;
+    border: 2px solid #28a745;
+    border-radius: 8px;
+    object-fit: cover;
+}
+
+video.responsive-local-video.local-video-waiting {
+    top: 1vh;
+    right: 1vw;
+    width: min(20vw, 300px);
+    height: min(15vh, 225px);
+}
+
+video.responsive-local-video.local-video-pip {
+    top: 2vh;
+    right: 2vw;
+    width: min(18vw, 250px);
+    height: min(13.5vh, 188px);
+}
+
+video.responsive-local-video.local-video-split {
+    top: 2vh;
+    right: 2vw;
+    width: min(15vw, 200px);
+    height: min(11.25vh, 150px);
+}
+
+video.responsive-local-video.local-video-grid {
+    top: 2vh;
+    left: 2vw;
+    width: min(12vw, 160px);
+    height: min(9vh, 120px);
+}
+
+@media (max-width: 768px) {
+    video.responsive-local-video.local-video-waiting { width: min(25vw, 200px); height: min(18vh, 150px); }
+    video.responsive-local-video.local-video-pip { width: min(22vw, 180px); height: min(16vh, 135px); }
+    video.responsive-local-video.local-video-split { width: min(20vw, 160px); height: min(15vh, 120px); }
+    video.responsive-local-video.local-video-grid { width: min(18vw, 140px); height: min(13vh, 105px); }
+}
+
+@media (max-width: 480px) {
+    video.responsive-local-video.local-video-waiting { width: min(30vw, 150px); height: min(22vh, 113px); }
+    video.responsive-local-video.local-video-pip { width: min(28vw, 140px); height: min(20vh, 105px); }
+    video.responsive-local-video.local-video-split { width: min(25vw, 120px); height: min(18vh, 90px); }
+    video.responsive-local-video.local-video-grid { width: min(22vw, 100px); height: min(16vh, 75px); }
+}
+</style>
 <div class="row">
     <!-- Main Video Area -->
-    <div class="col-md-9">
-        <div class="video-container" style="height: 500px; background: #1a1a1a; border-radius: 8px; position: relative;">
+    <div class="col-12">
+        <div class="video-container" style="height: 70vh; min-height: 600px; background: #1a1a1a; border-radius: 8px; position: relative;">
             <!-- Dynamic video elements will be created here -->
-            <video id="localVideo" class="video-element" autoplay playsinline muted 
-                   style="position: absolute; top: 10px; right: 10px; width: 200px; height: 150px; z-index: 10; border: 2px solid #28a745; border-radius: 8px;"></video>
+            <video id="localVideo" class="video-element responsive-local-video local-video-waiting" autoplay playsinline muted></video>
             
             <!-- Welcome message when no participants -->
             <div id="noParticipantsMessage" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #fff;">
@@ -77,7 +134,7 @@
     </div>
     
     <!-- Sidebar -->
-    <div class="col-md-3">
+    <div class="col-12 mt-3">
         <div class="participant-list">
             <h5><i class="fas fa-users"></i> Participants</h5>
             <div id="participantsList">
