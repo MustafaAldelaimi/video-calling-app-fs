@@ -161,6 +161,34 @@ video .mute-indicator:hover {
     user-select: none;
 }
 
+/* Video disabled placeholder styles */
+.video-disabled-placeholder {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: #6c757d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 18px;
+    font-weight: 500;
+    z-index: 5;
+    border-radius: inherit;
+}
+
+.video-disabled-placeholder .participant-name {
+    text-align: center;
+}
+
+/* Hide video element when disabled placeholder is shown */
+.video-wrapper.video-disabled video,
+.video-element.video-disabled {
+    opacity: 0;
+}
+
 /* Ensure mute indicator is visible on small screens */
 @media (max-width: 480px) {
     video .mute-indicator {
@@ -176,6 +204,10 @@ video .mute-indicator:hover {
         padding: 3px 8px;
         bottom: 6px;
         right: 6px;
+    }
+    
+    .video-disabled-placeholder {
+        font-size: 16px;
     }
 }
 </style>

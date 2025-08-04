@@ -232,6 +232,17 @@ class WebRTCHandler {
           this.updateMuteIndicator(`video-${data.sender_id}`, data.is_muted)
         }
         break
+
+      case "video_status":
+        if (data.sender_id !== this.userId) {
+          const participantName = this.participantNames?.get(data.sender_id) || `User ${data.sender_id}`
+          if (data.is_video_enabled) {
+            this.hideVideoDisabledPlaceholder(`video-${data.sender_id}`)
+          } else {
+            this.showVideoDisabledPlaceholder(`video-${data.sender_id}`, participantName)
+          }
+        }
+        break
     }
   }
 
@@ -1226,6 +1237,15 @@ class WebRTCHandler {
         // Update local video display
         document.getElementById("localVideo").srcObject = this.localStream
 
+        // Hide video disabled placeholder
+        this.hideVideoDisabledPlaceholder('localVideo')
+
+        // Notify other participants about video being enabled
+        this.sendWebSocketMessage({
+          type: "video_status",
+          is_video_enabled: true
+        })
+
         this.isVideoOff = false
         this.updateVideoButton()
         console.log("✅ Video enabled and camera light should turn on")
@@ -1257,11 +1277,14 @@ class WebRTCHandler {
           }
         })
 
-        // Update local video display to show "video off" state
-        const localVideo = document.getElementById("localVideo")
-        if (localVideo) {
-          localVideo.srcObject = this.localStream // Update with stream that no longer has video
-        }
+        // Show video disabled placeholder for local video
+        this.showVideoDisabledPlaceholder('localVideo', 'You')
+
+        // Notify other participants about video being disabled
+        this.sendWebSocketMessage({
+          type: "video_status",
+          is_video_enabled: false
+        })
 
         this.isVideoOff = true
         this.updateVideoButton()
@@ -1475,6 +1498,12 @@ class WebRTCHandler {
       console.error("❌ Video container not found!")
       return
     }
+    
+    // Store username for later use (for video disabled placeholders)
+    if (!this.participantNames) {
+      this.participantNames = new Map()
+    }
+    this.participantNames.set(userId, username)
     
     // Create wrapper for proper positioning context
     const wrapper = document.createElement('div')
@@ -1698,6 +1727,12 @@ class WebRTCHandler {
       videoElement.srcObject = stream
       console.log(`✅ Remote stream attached to video element for user ${userId}`)
       
+      // Get participant name for placeholder
+      const participantName = this.participantNames?.get(userId) || `User ${userId}`
+      
+      // Check if stream has video tracks and show/hide placeholder accordingly
+      this.checkStreamForVideo(userId, stream, participantName)
+      
       // Set up audio monitoring for remote stream
       this.setupRemoteAudioMonitoring(userId, stream)
       
@@ -1717,6 +1752,21 @@ class WebRTCHandler {
       videoElement.onerror = (error) => {
         console.error(`❌ Video error for ${userId}:`, error)
       }
+
+      // Monitor stream track changes
+      stream.addEventListener('addtrack', (event) => {
+        console.log(`➕ Track added to stream for ${userId}:`, event.track.kind)
+        if (event.track.kind === 'video') {
+          this.checkStreamForVideo(userId, stream, participantName)
+        }
+      })
+
+      stream.addEventListener('removetrack', (event) => {
+        console.log(`➖ Track removed from stream for ${userId}:`, event.track.kind)
+        if (event.track.kind === 'video') {
+          this.checkStreamForVideo(userId, stream, participantName)
+        }
+      })
 
     } catch (error) {
       console.error(`❌ Error attaching stream to video element for ${userId}:`, error)
@@ -1745,6 +1795,12 @@ class WebRTCHandler {
     if (this.pendingStreams && this.pendingStreams.has(userId)) {
       console.log(`🗑️ Cleaning up pending stream for ${userId}`)
       this.pendingStreams.delete(userId)
+    }
+    
+    // Clean up participant names
+    if (this.participantNames && this.participantNames.has(userId)) {
+      this.participantNames.delete(userId)
+      console.log(`🗑️ Cleaned up participant name for ${userId}`)
     }
     
     // Update video layout for remaining participants
@@ -2276,6 +2332,136 @@ class WebRTCHandler {
     // Stop monitoring if no more participants
     if (this.remoteAnalysers.size === 0 && !this.localAnalyser) {
       this.stopAudioMonitoring()
+    }
+  }
+
+  showVideoDisabledPlaceholder(elementId, participantName) {
+    console.log(`📺 Showing video disabled placeholder for ${elementId} (${participantName})`)
+    
+    const videoElement = document.getElementById(elementId)
+    if (!videoElement) {
+      console.warn(`❌ Video element not found: ${elementId}`)
+      return
+    }
+
+    // Find the wrapper element or use the video element directly
+    let targetElement = videoElement
+    if (videoElement.parentElement && videoElement.parentElement.classList.contains('video-wrapper')) {
+      targetElement = videoElement.parentElement
+      console.log(`📦 Using wrapper element for ${elementId}`)
+    } else {
+      console.log(`📦 Using video element directly for ${elementId}`)
+    }
+
+    // Remove existing placeholder if it exists
+    const existingPlaceholder = targetElement.querySelector('.video-disabled-placeholder')
+    if (existingPlaceholder) {
+      console.log(`🗑️ Removing existing placeholder for ${elementId}`)
+      existingPlaceholder.remove()
+    }
+
+    // Create and add video disabled placeholder
+    const placeholder = document.createElement('div')
+    placeholder.className = 'video-disabled-placeholder'
+    placeholder.style.cssText = `
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      background: #6c757d !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      color: white !important;
+      font-size: 18px !important;
+      font-weight: 500 !important;
+      z-index: 9999 !important;
+      border-radius: 8px !important;
+      box-sizing: border-box !important;
+    `
+    placeholder.innerHTML = `
+      <div class="participant-name" style="text-align: center;">${participantName}</div>
+    `
+    
+    targetElement.appendChild(placeholder)
+    targetElement.classList.add('video-disabled')
+    
+    console.log(`✅ Video disabled placeholder shown for ${elementId}`)
+    console.log(`📋 Target element:`, targetElement)
+    console.log(`📋 Placeholder element:`, placeholder)
+  }
+
+  hideVideoDisabledPlaceholder(elementId) {
+    console.log(`📺 Hiding video disabled placeholder for ${elementId}`)
+    
+    const videoElement = document.getElementById(elementId)
+    if (!videoElement) {
+      console.warn(`❌ Video element not found: ${elementId}`)
+      return
+    }
+
+    // Find the wrapper element or use the video element directly
+    let targetElement = videoElement
+    if (videoElement.parentElement && videoElement.parentElement.classList.contains('video-wrapper')) {
+      targetElement = videoElement.parentElement
+      console.log(`📦 Using wrapper element for hiding ${elementId}`)
+    } else {
+      console.log(`📦 Using video element directly for hiding ${elementId}`)
+    }
+
+    // Remove placeholder
+    const placeholder = targetElement.querySelector('.video-disabled-placeholder')
+    if (placeholder) {
+      console.log(`🗑️ Removing placeholder for ${elementId}`)
+      placeholder.remove()
+    } else {
+      console.log(`❓ No placeholder found to remove for ${elementId}`)
+    }
+
+    // Remove video-disabled class
+    targetElement.classList.remove('video-disabled')
+    
+    console.log(`✅ Video disabled placeholder hidden for ${elementId}`)
+  }
+
+  // Debug function to test placeholder functionality
+  debugTestPlaceholder() {
+    console.log("🧪 Testing video disabled placeholder functionality")
+    
+    // Test on local video
+    const localVideo = document.getElementById('localVideo')
+    if (localVideo) {
+      console.log("📹 Local video element found:", localVideo)
+      console.log("📦 Local video parent:", localVideo.parentElement)
+      console.log("📊 Local video wrapper class:", localVideo.parentElement?.classList.toString())
+      
+      // Test showing placeholder
+      this.showVideoDisabledPlaceholder('localVideo', 'TEST USER')
+      
+      // Test hiding after 3 seconds
+      setTimeout(() => {
+        this.hideVideoDisabledPlaceholder('localVideo')
+      }, 3000)
+    } else {
+      console.warn("❌ Local video element not found")
+    }
+  }
+
+  checkStreamForVideo(userId, stream, participantName) {
+    console.log(`🔍 Checking stream for video tracks: ${userId}`)
+    
+    const videoTracks = stream.getVideoTracks()
+    const hasVideoTrack = videoTracks.length > 0 && videoTracks[0].enabled
+    
+    console.log(`📹 Video tracks for ${userId}: ${videoTracks.length}, enabled: ${hasVideoTrack}`)
+    
+    if (!hasVideoTrack) {
+      // Show placeholder if no video tracks or video is disabled
+      this.showVideoDisabledPlaceholder(`video-${userId}`, participantName)
+    } else {
+      // Hide placeholder if video is available
+      this.hideVideoDisabledPlaceholder(`video-${userId}`)
     }
   }
 }
