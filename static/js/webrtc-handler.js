@@ -23,6 +23,9 @@ class WebRTCHandler {
     this.remoteAnalysers = new Map()
     this.audioMonitoringInterval = null
     this.speakingThreshold = 0.01 // Lowered threshold for better voice detection
+    
+    // Message deduplication to prevent race conditions
+    this.processedMessages = new Map() // userId -> Set of message hashes
 
     // Quality settings
     this.qualitySettings = {
@@ -592,6 +595,42 @@ class WebRTCHandler {
     return shouldInitiate
   }
 
+  // Message deduplication helper
+  generateMessageHash(type, senderId, data) {
+    // Create a hash from message type and content
+    if (type === 'webrtc_offer' || type === 'webrtc_answer') {
+      // Use part of the SDP to identify unique offers/answers
+      const sdp = data.sdp || ''
+      const sdpHash = sdp.substring(0, 50) // First 50 chars of SDP
+      return `${type}-${senderId}-${sdpHash}`
+    } else if (type === 'ice_candidate') {
+      // Use candidate string for ICE candidates
+      const candidate = data.candidate || ''
+      return `${type}-${senderId}-${candidate}`
+    }
+    return `${type}-${senderId}`
+  }
+
+  isMessageAlreadyProcessed(senderId, messageHash) {
+    if (!this.processedMessages.has(senderId)) {
+      this.processedMessages.set(senderId, new Set())
+    }
+    
+    const userMessages = this.processedMessages.get(senderId)
+    if (userMessages.has(messageHash)) {
+      return true
+    }
+    
+    // Add to processed messages and clean up old ones (keep last 10)
+    userMessages.add(messageHash)
+    if (userMessages.size > 10) {
+      const firstMessage = userMessages.values().next().value
+      userMessages.delete(firstMessage)
+    }
+    
+    return false
+  }
+
   async createPeerConnection(userId) {
     console.log(`🔗 Creating peer connection for user: ${userId}`)
     
@@ -713,7 +752,22 @@ class WebRTCHandler {
     }
 
     try {
-      console.log(`📊 Peer connection state before creating offer: ${peerConnection.signalingState}`)
+      console.log(`📊 Checking peer connection state before creating offer: ${peerConnection.signalingState}`)
+      
+      // Only create offer if we're in stable state
+      if (peerConnection.signalingState !== 'stable') {
+        console.warn(`⚠️ Cannot create offer for ${userId} - peer connection not in stable state: ${peerConnection.signalingState}`)
+        
+        // If connection is in a bad state, reset it
+        if (peerConnection.signalingState === 'closed' || peerConnection.signalingState === 'failed') {
+          console.log(`🔄 Resetting failed connection for ${userId}`)
+          this.closePeerConnection(userId)
+          await this.createPeerConnection(userId)
+          // Retry creating offer after reset
+          setTimeout(() => this.createOffer(userId), 1000)
+        }
+        return
+      }
       
       const offer = await peerConnection.createOffer()
       await peerConnection.setLocalDescription(offer)
@@ -728,11 +782,22 @@ class WebRTCHandler {
       })
     } catch (error) {
       console.error(`❌ Error creating offer for ${userId}:`, error)
+      
+      // Attempt recovery on error
+      console.log(`🔄 Attempting connection recovery after offer creation failed for: ${userId}`)
+      this.handleConnectionFailure(userId)
     }
   }
 
   async handleOffer(senderId, offer) {
     console.log(`📨 Received offer from user: ${senderId}`)
+    
+    // Check for duplicate messages
+    const messageHash = this.generateMessageHash('webrtc_offer', senderId, offer)
+    if (this.isMessageAlreadyProcessed(senderId, messageHash)) {
+      console.log(`🔄 Ignoring duplicate offer from ${senderId}`)
+      return
+    }
     
     let peerConnection = this.peerConnections.get(senderId)
     if (!peerConnection) {
@@ -741,35 +806,88 @@ class WebRTCHandler {
     }
 
     try {
-      console.log(`🔄 Setting remote description (offer) from: ${senderId}`)
-      console.log(`📊 Peer connection state before setRemoteDescription: ${peerConnection.signalingState}`)
+      console.log(`🔄 Checking peer connection state before setting remote description (offer) from: ${senderId}`)
+      console.log(`📊 Current signaling state: ${peerConnection.signalingState}`)
       
-      await peerConnection.setRemoteDescription(offer)
-      
-      console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
-      
-      // Process any pending ICE candidates now that remote description is set
-      await this.processPendingIceCandidates(senderId)
-      
-      console.log(`📞 Creating answer for: ${senderId}`)
-      
-      const answer = await peerConnection.createAnswer()
-      await peerConnection.setLocalDescription(answer)
-      
-      console.log(`📊 Peer connection state after setLocalDescription: ${peerConnection.signalingState}`)
+      // Check if we're in a valid state to receive an offer
+      if (peerConnection.signalingState === 'stable' || peerConnection.signalingState === 'have-local-offer') {
+        // If we have a local offer and receive a remote offer, we have a glare situation
+        if (peerConnection.signalingState === 'have-local-offer') {
+          console.log(`⚠️ Offer collision detected with ${senderId}. Resolving using user ID comparison...`)
+          
+          // Use the same logic as shouldInitiateCall to resolve the collision
+          if (this.shouldInitiateCall(senderId)) {
+            // We should be the initiator, so ignore their offer and keep our offer
+            console.log(`🚫 Ignoring remote offer from ${senderId} (we are the designated initiator)`)
+            return
+          } else {
+            // They should be the initiator, so accept their offer and cancel ours
+            console.log(`✅ Accepting remote offer from ${senderId} (they are the designated initiator)`)
+            // Reset to stable state first
+            await peerConnection.setLocalDescription({type: 'rollback'})
+          }
+        }
+        
+        console.log(`✅ Valid state for setting remote offer, proceeding...`)
+        await peerConnection.setRemoteDescription(offer)
+        
+        console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
+        
+        // Process any pending ICE candidates now that remote description is set
+        await this.processPendingIceCandidates(senderId)
+        
+        console.log(`📞 Creating answer for: ${senderId}`)
+        
+        const answer = await peerConnection.createAnswer()
+        await peerConnection.setLocalDescription(answer)
+        
+        console.log(`📊 Peer connection state after setLocalDescription: ${peerConnection.signalingState}`)
 
-      this.sendWebSocketMessage({
-        type: "webrtc_answer",
-        answer: answer,
-        target_id: senderId,
-      })
+        this.sendWebSocketMessage({
+          type: "webrtc_answer",
+          answer: answer,
+          target_id: senderId,
+        })
+      } else {
+        console.warn(`⚠️ Unexpected signaling state '${peerConnection.signalingState}' when receiving offer from: ${senderId}`)
+        console.warn(`🔄 Resetting connection and accepting offer...`)
+        
+        // Reset the connection
+        this.closePeerConnection(senderId)
+        peerConnection = await this.createPeerConnection(senderId)
+        
+        // Now process the offer
+        await peerConnection.setRemoteDescription(offer)
+        await this.processPendingIceCandidates(senderId)
+        
+        const answer = await peerConnection.createAnswer()
+        await peerConnection.setLocalDescription(answer)
+        
+        this.sendWebSocketMessage({
+          type: "webrtc_answer",
+          answer: answer,
+          target_id: senderId,
+        })
+      }
     } catch (error) {
-      console.error("Error handling offer:", error)
+      console.error(`❌ Error handling offer from ${senderId}:`, error)
+      console.error(`📊 Peer connection state during error: ${peerConnection?.signalingState}`)
+      
+      // Attempt recovery
+      console.log(`🔄 Attempting connection recovery for: ${senderId}`)
+      this.handleConnectionFailure(senderId)
     }
   }
 
   async handleAnswer(senderId, answer) {
     console.log(`📨 Received answer from user: ${senderId}`)
+    
+    // Check for duplicate messages
+    const messageHash = this.generateMessageHash('webrtc_answer', senderId, answer)
+    if (this.isMessageAlreadyProcessed(senderId, messageHash)) {
+      console.log(`🔄 Ignoring duplicate answer from ${senderId}`)
+      return
+    }
     
     const peerConnection = this.peerConnections.get(senderId)
     if (!peerConnection) {
@@ -778,20 +896,43 @@ class WebRTCHandler {
     }
 
     try {
-      console.log(`🔄 Setting remote description (answer) from: ${senderId}`)
-      console.log(`📊 Peer connection state before setRemoteDescription: ${peerConnection.signalingState}`)
+      console.log(`🔄 Checking peer connection state before setting remote description (answer) from: ${senderId}`)
+      console.log(`📊 Current signaling state: ${peerConnection.signalingState}`)
       
-      await peerConnection.setRemoteDescription(answer)
-      
-      console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
-      
-      // Process any pending ICE candidates now that remote description is set
-      await this.processPendingIceCandidates(senderId)
-      
-      console.log(`✅ Successfully processed answer from: ${senderId}`)
+      // Only set remote description if we're in the correct state
+      if (peerConnection.signalingState === 'have-local-offer') {
+        console.log(`✅ Valid state for setting remote answer, proceeding...`)
+        await peerConnection.setRemoteDescription(answer)
+        
+        console.log(`📊 Peer connection state after setRemoteDescription: ${peerConnection.signalingState}`)
+        
+        // Process any pending ICE candidates now that remote description is set
+        await this.processPendingIceCandidates(senderId)
+        
+        console.log(`✅ Successfully processed answer from: ${senderId}`)
+      } else if (peerConnection.signalingState === 'stable') {
+        console.log(`⚠️ Peer connection already stable, ignoring duplicate answer from: ${senderId}`)
+      } else {
+        console.warn(`⚠️ Unexpected signaling state '${peerConnection.signalingState}' when receiving answer from: ${senderId}`)
+        console.warn(`🔄 Attempting to reset connection...`)
+        
+        // Close and recreate the peer connection if in unexpected state
+        this.closePeerConnection(senderId)
+        await this.createPeerConnection(senderId)
+        
+        // Re-initiate if we should be the caller
+        if (this.shouldInitiateCall(senderId)) {
+          console.log(`🔄 Re-initiating call after reset to: ${senderId}`)
+          await this.createOffer(senderId)
+        }
+      }
     } catch (error) {
       console.error(`❌ Error handling answer from ${senderId}:`, error)
       console.error(`📊 Peer connection state during error: ${peerConnection.signalingState}`)
+      
+      // Attempt recovery by resetting the connection
+      console.log(`🔄 Attempting connection recovery for: ${senderId}`)
+      this.handleConnectionFailure(senderId)
     }
   }
 
@@ -1641,6 +1782,12 @@ class WebRTCHandler {
     if (this.connectionRetries.has(userId)) {
       this.connectionRetries.delete(userId)
       console.log(`🧹 Cleaned up retry counter for ${userId}`)
+    }
+    
+    // Clean up processed messages
+    if (this.processedMessages.has(userId)) {
+      this.processedMessages.delete(userId)
+      console.log(`🧹 Cleaned up processed messages for ${userId}`)
     }
   }
 
